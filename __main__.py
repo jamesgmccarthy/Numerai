@@ -36,8 +36,8 @@ def main():
     keys['LATEST_ROUND'] = download_data(numapi, keys)
     update_env_file(keys)
     # gbm_hpo.main()
-    # nn_hpo.main()
-    ae_hpo.main()
+    nn_hpo.main()
+    # ae_hpo.main()
 
 
 if __name__ == '__main__':

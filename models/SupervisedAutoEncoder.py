@@ -1,8 +1,10 @@
 import torch
 import torch.nn as nn
-import numpy
+import numpy as np
 import pytorch_lightning as pl
 from sklearn.metrics import mean_squared_error, mean_absolute_error
+from data_loading import utils
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 
 class SupAE(pl.LightningModule):
@@ -111,3 +113,29 @@ class SupAE(pl.LightningModule):
             optimizer, patience=5, factor=0.1, min_lr=1e-7, eps=1e-08
         )
         return {'optimizer': optimizer, 'lr_scheduler': scheduler, 'monitor': 'val_loss'}
+
+
+def train_ae_model(data_dict):
+    p = {'dim_1': 675, 'dim_2': 400, 'dim_3': 224, 'hidden': 162,
+         'activation': nn.ReLU, 'dropout': 0.2916447561918717, 'lr': 0.030272591341587315,
+         'recon_loss_factor': 0.4447516076774931, 'batch_size': 1252, 'loss_sup_ae': nn.MSELoss,
+         'loss_recon': nn.MSELoss,
+         'embedding': True}
+    train_idx = np.where(data_dict['era'] < 110)
+    val_idx = np.where(data_dict['era'] > 110)
+    p['input_size'] = len(data_dict['features'])
+    p['output_size'] = 1
+    dataset = utils.FinData(
+        data=data_dict['data'], target=data_dict['target'], era=data_dict['era'])
+    dataloaders = utils.create_dataloaders(dataset=dataset, indexes={
+                                           'train': train_idx, 'val': val_idx}, batch_size=p['batch_size'])
+    model = SupAE(p)
+    es = EarlyStopping(monitor='val_loss', patience=10,
+                       min_delta=0.005, mode='min')
+    trainer = pl.Trainer(max_epochs=100,
+                         gpus=1,
+                         callbacks=[es])
+    trainer.fit(
+        model, train_dataloader=dataloaders['train'], val_dataloaders=dataloaders['val'])
+    torch.save(model.state_dict(), f'./saved_models/trained/trained_ae.pth')
+    return model

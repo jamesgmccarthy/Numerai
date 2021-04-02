@@ -16,7 +16,8 @@ import numpy as np
 from models.resnet import ResNet as Classifier
 from data_loading.purged_group_time_series import PurgedGroupTimeSeriesSplit
 from data_loading.utils import load_data, preprocess_data, FinData, weighted_mean, seed_everything, calc_data_mean, \
-    create_dataloaders
+    create_dataloaders, load_model
+from models.SupervisedAutoEncoder import train_ae_model
 
 
 class MetricsCallback(Callback):
@@ -109,14 +110,21 @@ def main():
     data = load_data(root_dir='./data/', mode='train')
     data, target, features, era = preprocess_data(
         data, ordinal=True)
+    data_dict = {'data': data, 'target': target,
+                 'features': features, 'era': era}
+    train_ae = True
+    if train_ae:
+        model = train_ae_model(data_dict=data_dict)
+    else:
+        p = joblib.load('./saved_models/parameters/ae_params.pkl')
+        model = load_model('./saved_models/trained/trained_ae.pth', p=p)
     api_token = 'eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vdWkubmVwdHVuZS5haSIsImFwaV91cmwiOiJodHRwczovL3VpLm5lcHR1bmUuYWkiLCJhcGlfa2V5IjoiYWQxMjg3OGEtMGI1NC00NzFmLTg0YmMtZmIxZjcxZDM2NTAxIn0='
     neptune.init(api_token=api_token,
                  project_qualified_name='jamesmccarthy65/Numerai')
     nn_exp = neptune.create_experiment('Resnet_HPO')
     nn_neptune_callback = opt_utils.NeptuneCallback(experiment=nn_exp)
     study = optuna.create_study(direction='minimize')
-    data_dict = {'data': data, 'target': target,
-                 'features': features, 'era': era}
+
     study.optimize(lambda trial: optimize(trial, data_dict=data_dict), n_trials=10,
                    callbacks=[nn_neptune_callback])
     joblib.dump(
