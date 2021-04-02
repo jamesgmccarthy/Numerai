@@ -1,0 +1,16 @@
+*.ipynb
+*.pkl
+*.xml
+*.env
+*.json
+*.csv
+.*pyc
+__pycache__
+*.csv#
+examples
+*.ckpt
+*.pth
+*.zip
+*.iml
+*png
+example*
