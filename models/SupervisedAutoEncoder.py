@@ -154,10 +154,14 @@ def create_hidden_rep(model, data_dict):
     dataloaders = utils.create_dataloaders(
         dataset, {'train': index}, batch_size=batch_size)
     hiddens = []
+    predictions = []
     for i, batch in enumerate(dataloaders['train']):
-        _, hidden, _, _ = model(batch['data'].view(
+        _, hidden, pred, _ = model(batch['data'].view(
             batch['data'].size(1), -1))
         hiddens.append(hidden.cpu().detach().numpy().tolist())
+        predictions.append(pred.cpu().detach().numpy().tolist())
     hiddens = np.array([hiddens[i][j] for i in range(
         len(hiddens)) for j in range(len(hiddens[i]))])
-    return hiddens
+    preds = np.array([predictions[i][j] for i in range(
+        len(predictions)) for j in range(len(predictions[i]))])
+    return {'hidden': hiddens, 'preds': preds}

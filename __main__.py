@@ -28,17 +28,21 @@ def update_env_file(env_vars):
         f.write(f'PUBLIC_ID={env_vars["PUBLIC_ID"]}\n')
         f.write(f'PRIVATE_KEY={env_vars["PRIVATE_KEY"]}\n')
 
+
 def create_preds():
     pass
+
+
 def main():
     keys = credentials()
     numapi = numerapi.NumerAPI(
         verbosity='INFO', public_id=keys['PUBLIC_ID'], secret_key=keys['PRIVATE_KEY'])
     keys['LATEST_ROUND'] = download_data(numapi, keys)
     update_env_file(keys)
-    gbm_hpo.main()
+    # gbm_hpo.main()
     ae_hpo.main()
     nn_hpo.main(train_ae=True)
+
 
 if __name__ == '__main__':
     main()

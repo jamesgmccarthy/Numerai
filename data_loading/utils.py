@@ -158,24 +158,23 @@ def create_dataloaders(dataset: Dataset, indexes: dict, batch_size):
     test_idx = indexes.get('test', None)
     dataloaders = {}
     if train_idx:
-        train_set = Subset(
-            dataset, train_idx)
-        train_sampler = BatchSampler(SequentialSampler(
-            train_set), batch_size=batch_size, drop_last=False)
+        train_set = Subset(dataset, train_idx)
+        train_sampler = BatchSampler(
+            train_set.indices, batch_size=batch_size, drop_last=False)
         dataloaders['train'] = DataLoader(
-            dataset, sampler=train_sampler, num_workers=10, pin_memory=True)
+            dataset, sampler=train_sampler, num_workers=10, pin_memory=True, shuffle=False)
     if val_idx:
         val_set = Subset(dataset, val_idx)
-        val_sampler = BatchSampler(SequentialSampler(
-            val_set), batch_size=batch_size, drop_last=False)
+        val_sampler = BatchSampler(
+            val_set.indices, batch_size=batch_size, drop_last=False)
         dataloaders['val'] = DataLoader(
-            dataset, sampler=val_sampler, num_workers=10, pin_memory=True)
+            dataset, sampler=val_sampler, num_workers=10, pin_memory=True, shuffle=False)
     if test_idx:
         test_set = Subset(dataset, test_idx)
-        test_sampler = BatchSampler(SequentialSampler(
-            test_set), batch_size=batch_size, drop_last=False)
+        test_sampler = BatchSampler(
+            test_set.indices, batch_size=batch_size, drop_last=False)
         dataloaders['test'] = DataLoader(
-            dataset, sampler=test_sampler, num_workers=10, pin_memory=True)
+            dataset, sampler=test_sampler, num_workers=10, pin_memory=True, shuffle=False)
     return dataloaders
 
 
@@ -215,45 +214,59 @@ def init_weights(m, func):
         nn.init.xavier_normal_(m.weight, nn.init.calculate_gain(func))
 
 
-def create_predictions(root_dir: str = './data', models: dict = {}, hidden=True):
+def create_predictions(root_dir: str = './data', models: dict = {}, hidden=True, ae=True):
     test_files_path, test_files_exist = check_test_files(root_dir)
     if test_files_exist:
         test_files = os.listdir(test_files_path)
     for file in test_files:
-        df = load_data(root_dir='./data', mode='train',
+        df = load_data(root_dir='./data', mode='test',
                        overide=f'{test_files_path}/{file}')
         df['target'] = 0
         data, target, features, era = preprocess_data(data=df, ordinal=True)
         t_idx = np.arange(start=0, stop=len(era), step=1).tolist()
-        p_ae = models['ae'][1]
-        p_ae['input_size'] = len(features)
-        p_ae['output_size'] = 1
-        model = models['ae'][0]
-        model.eval()
         data_dict = data_dict = {'data': data, 'target': target,
                                  'features': features, 'era': era}
-        data_dict['hidden'] = create_hidden_rep(
-            model=model, data_dict=data_dict)
-        data_dict['hidden_true'] = True
-        p_res = models['ResNet'][1]
-        p_res['input_size'] = len(features)
-        p_res['output_size'] = 1
-        p_res['hidden_len'] = data_dict['hidden'].shape[-1]
-        dataset = FinData(
-            data=data_dict['data'], target=data_dict['target'], era=data_dict['era'], hidden=data_dict.get('hidden', None))
-        dataloaders = create_dataloaders(
-            dataset, indexes={'train': t_idx}, batch_size=p_res['batch_size'])
-        model = models['ResNet'][0]
-        model.eval()
-        predictions = []
-        for batch in dataloaders['train']:
-            pred = model(batch['data'].view(
-                batch['data'].shape[1], -1), hidden=batch['hidden'].view(batch['hidden'].shape[1], -1))
-            predictions.append(pred.cpu().detach().numpy().tolist())
-        predictions = np.array([predictions[i][j] for i in range(
-            len(predictions)) for j in range(len(predictions[i]))])
-        df['predictions'] = predictions
-        df = df[['id', 'predictions']]
+        if models.get('ae', None):
+            p_ae = models['ae'][1]
+            p_ae['input_size'] = len(features)
+            p_ae['output_size'] = 1
+            model = models['ae'][0]
+            model.eval()
+        if not ae:
+            hidden_pred = create_hidden_rep(
+                model=model, data_dict=data_dict)
+            data_dict['hidden_true'] = True
+            df['prediction_ae'] = hidden_pred['preds']
+        if models.get('ResNet', None):
+            p_res = models['ResNet'][1]
+            p_res['input_size'] = len(features)
+            p_res['output_size'] = 1
+            p_res['hidden_len'] = data_dict['hidden'].shape[-1]
+            dataset = FinData(
+                data=data_dict['data'], target=data_dict['target'], era=data_dict['era'], hidden=data_dict.get('hidden', None))
+            dataloaders = create_dataloaders(
+                dataset, indexes={'train': t_idx}, batch_size=p_res['batch_size'])
+            model = models['ResNet'][0]
+            model.eval()
+            predictions = []
+            for batch in dataloaders['train']:
+                pred = model(batch['data'].view(
+                    batch['data'].shape[1], -1), hidden=batch['hidden'].view(batch['hidden'].shape[1], -1))
+                predictions.append(pred.cpu().detach().numpy().tolist())
+            predictions = np.array([predictions[i][j] for i in range(
+                len(predictions)) for j in range(len(predictions[i]))])
+            df['prediction_resnet'] = predictions
+        if models.get('xgboost', None):
+            model_xgboost = models['xgboost'][0]
+            p_xgboost = models['xgboost'][1]
+            x_val = data_dict['data']
+            df['prediction_xgb'] = model_xgboost.predict(x_val)
+        if models.get('lgb', None):
+            model_lgb = models['lgb'][0]
+            p_lgb = models['lgb'][1]
+            x_val = data_dict['data']
+            df['prediction_lgb'] = model_lgb.predict(x_val)
+        df = df[['id', 'prediction_lgb']]
         pred_path = f'{get_data_path(root_dir)}/predictions/{era[0]}'
         df.to_csv(f'{pred_path}.csv')
 
@@ -267,9 +280,9 @@ def check_test_files(root_dir='./data'):
     else:
         os.makedirs(test_files_path)
         df = load_data(root_dir=root_dir, mode='test')
-        df['era'][df['era'] == 'eraX'] = 'era000'
+        df['era'][df['era'] == 'eraX'] = 'era999'
         for era in df['era'].unique():
-            path = f'{test_files_path}/era{era}'
+            path = f'{test_files_path}/{era}'
             df[df['era'] == era].to_csv(f'{path}.csv')
         return test_files_path, True
 
@@ -277,6 +290,7 @@ def check_test_files(root_dir='./data'):
 def create_prediction_file(root_dir='./data', eras=None):
     pred_path = f'{get_data_path(root_dir)}/predictions/'
     files = os.listdir(pred_path)
+    files.sort()
     if eras:
         dfs = [pd.read_csv(f'{pred_path}{file}')
                for file in files if file != 'predictions.csv' and file in eras]
@@ -284,7 +298,7 @@ def create_prediction_file(root_dir='./data', eras=None):
         dfs = [pd.read_csv(f'{pred_path}{file}')
                for file in files if file != 'predictions.csv']
     df = pd.concat(dfs)
-    df = df[['id', 'predictions']]
+    df = df[['id', 'prediction_lgb']]
     df.columns = ['id', 'prediction']
     df.to_csv(f'{pred_path}predictions.csv')
 

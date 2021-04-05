@@ -16,3 +16,4 @@ examples
 example*
 events.*
 *.yaml
+*.bin
