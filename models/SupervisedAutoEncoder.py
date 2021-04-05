@@ -116,13 +116,16 @@ class SupAE(pl.LightningModule):
 
 
 def train_ae_model(data_dict):
+    # TODO Dynamic
     p = {'dim_1': 675, 'dim_2': 400, 'dim_3': 224, 'hidden': 162,
          'activation': nn.ReLU, 'dropout': 0.2916447561918717, 'lr': 0.030272591341587315,
          'recon_loss_factor': 0.4447516076774931, 'batch_size': 1252, 'loss_sup_ae': nn.MSELoss,
          'loss_recon': nn.MSELoss,
          'embedding': True}
-    train_idx = np.where(data_dict['era'] < 110)
-    val_idx = np.where(data_dict['era'] > 110)
+    # TODO Fix this
+    train_idx = np.arange(start=0, stop=452205, step=1, dtype=np.int).tolist()
+    val_idx = np.arange(start=452206, stop=len(
+        data_dict['data']), step=1, dtype=np.int).tolist()
     p['input_size'] = len(data_dict['features'])
     p['output_size'] = 1
     dataset = utils.FinData(
@@ -139,3 +142,22 @@ def train_ae_model(data_dict):
         model, train_dataloader=dataloaders['train'], val_dataloaders=dataloaders['val'])
     torch.save(model.state_dict(), f'./saved_models/trained/trained_ae.pth')
     return model
+
+
+def create_hidden_rep(model, data_dict):
+    model.eval()
+    index = np.linspace(
+        0, data_dict['data'].shape[0], data_dict['data'].shape[0], dtype='int').tolist()
+    dataset = utils.FinData(
+        data_dict['data'], target=data_dict['target'], era=data_dict['era'])
+    batch_size = 5000
+    dataloaders = utils.create_dataloaders(
+        dataset, {'train': index}, batch_size=batch_size)
+    hiddens = []
+    for i, batch in enumerate(dataloaders['train']):
+        _, hidden, _, _ = model(batch['data'].view(
+            batch['data'].size(1), -1))
+        hiddens.append(hidden.cpu().detach().numpy().tolist())
+    hiddens = np.array([hiddens[i][j] for i in range(
+        len(hiddens)) for j in range(len(hiddens[i]))])
+    return hiddens

@@ -17,7 +17,7 @@ from models.resnet import ResNet as Classifier
 from data_loading.purged_group_time_series import PurgedGroupTimeSeriesSplit
 from data_loading.utils import load_data, preprocess_data, FinData, weighted_mean, seed_everything, calc_data_mean, \
     create_dataloaders, load_model
-from models.SupervisedAutoEncoder import train_ae_model
+from models.SupervisedAutoEncoder import SupAE, train_ae_model, create_hidden_rep
 
 
 class MetricsCallback(Callback):
@@ -73,7 +73,7 @@ def optimize(trial: optuna.Trial, data_dict):
     input_size = data_dict['data'].shape[-1]
     output_size = 1
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
-        os.path.join('models/', "trial_resnet_{}".format(trial.number)), monitor="val_mse", mode='min')
+        os.path.join('hpo/trials/', "trial_resnet_{}".format(trial.number)), monitor="val_mse", mode='min')
     logger = MetricsCallback()
     metrics = []
     sizes = []
@@ -81,11 +81,13 @@ def optimize(trial: optuna.Trial, data_dict):
     trial_file = None
     p = create_param_dict(trial, trial_file)
     p['batch_size'] = trial.suggest_int('batch_size', 8000, 15000)
+    if data_dict.get('hidden_true', None):
+        p['hidden_len'] = data_dict['hidden'].shape[-1]
     for i, (train_idx, val_idx) in enumerate(gts.split(data_dict['data'], groups=data_dict['era'])):
         model = Classifier(input_size, output_size, params=p)
         # model.apply(init_weights)
         dataset = FinData(
-            data=data_dict['data'], target=data_dict['target'], era=data_dict['era'])
+            data=data_dict['data'], target=data_dict['target'], era=data_dict['era'], hidden=data_dict.get('hidden', None))
         dataloaders = create_dataloaders(
             dataset, indexes={'train': train_idx, 'val': val_idx}, batch_size=p['batch_size'])
         es = EarlyStopping(monitor='val_mse', patience=10,
@@ -105,19 +107,24 @@ def optimize(trial: optuna.Trial, data_dict):
     return metrics_mean
 
 
-def main():
+def main(train_ae):
     seed_everything(0)
     data = load_data(root_dir='./data/', mode='train')
     data, target, features, era = preprocess_data(
         data, ordinal=True)
     data_dict = {'data': data, 'target': target,
                  'features': features, 'era': era}
-    train_ae = True
     if train_ae:
         model = train_ae_model(data_dict=data_dict)
     else:
         p = joblib.load('./saved_models/parameters/ae_params.pkl')
-        model = load_model('./saved_models/trained/trained_ae.pth', p=p)
+        p['input_size'] = len(data_dict['features'])
+        p['output_size'] = 1
+        model = load_model('./saved_models/trained/trained_ae.pth',
+                           p=p, pl_lightning=False, model=SupAE)
+
+    data_dict['hidden'] = create_hidden_rep(model, data_dict)
+    data_dict['hidden_true'] = True
     api_token = 'eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vdWkubmVwdHVuZS5haSIsImFwaV91cmwiOiJodHRwczovL3VpLm5lcHR1bmUuYWkiLCJhcGlfa2V5IjoiYWQxMjg3OGEtMGI1NC00NzFmLTg0YmMtZmIxZjcxZDM2NTAxIn0='
     neptune.init(api_token=api_token,
                  project_qualified_name='jamesmccarthy65/Numerai')
@@ -125,10 +132,10 @@ def main():
     nn_neptune_callback = opt_utils.NeptuneCallback(experiment=nn_exp)
     study = optuna.create_study(direction='minimize')
 
-    study.optimize(lambda trial: optimize(trial, data_dict=data_dict), n_trials=10,
+    study.optimize(lambda trial: optimize(trial, data_dict=data_dict), n_trials=100,
                    callbacks=[nn_neptune_callback])
     joblib.dump(
-        study, f'hpo/params/nn_hpo_{str(datetime.datetime.now().date())}.pkl')
+        study, f'./hpo/params/nn_hpo_train_{train_ae}_{str(datetime.datetime.now().date())}.pkl')
 
 
 if __name__ == '__main__':

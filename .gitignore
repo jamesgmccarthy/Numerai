@@ -14,3 +14,5 @@ examples
 *.iml
 *png
 example*
+events.*
+*.yaml

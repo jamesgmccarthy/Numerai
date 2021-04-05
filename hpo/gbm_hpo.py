@@ -108,7 +108,7 @@ def main():
     xgb_neptune_callback = opt_utils.NeptuneCallback(experiment=xgb_exp)
     study = optuna.create_study(direction='minimize')
     study.optimize(lambda trial: optimize(trial, data_dict),
-                   n_trials=10, callbacks=[xgb_neptune_callback])
+                   n_trials=100, callbacks=[xgb_neptune_callback])
     joblib.dump(
         study, f'hpo/params/xgb_hpo_{str(datetime.datetime.now().date())}.pkl')
     print('Creating LightGBM Trials')
@@ -116,7 +116,7 @@ def main():
     lgbm_neptune_callback = opt_utils.NeptuneCallback(experiment=lgb_exp)
     study = optuna.create_study(direction='minimize')
     study.optimize(lambda trial: loptimize(trial, data_dict),
-                   n_trials=10, callbacks=[lgbm_neptune_callback])
+                   n_trials=100, callbacks=[lgbm_neptune_callback])
     joblib.dump(
         study, f'hpo/params/lgb_hpo_{str(datetime.datetime.now().date())}.pkl')
 

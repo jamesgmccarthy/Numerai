@@ -34,8 +34,13 @@ class ResNet(pl.LightningModule):
             self.embedding_layers = nn.ModuleList(
                 [nn.Embedding(x, y) for x, y in emb_dims]).to(self.device)
             self.num_embeddings = sum([y for x, y in emb_dims])
-            self.d0 = nn.Linear(self.num_embeddings, dim_1)
-            self.d1 = nn.Linear(dim_1 + self.num_embeddings, dim_2)
+            if params.get('hidden_len', None):
+                self.input_size = self.num_embeddings + params['hidden_len']
+                self.d0 = nn.Linear(self.input_size, dim_1)
+                self.d1 = nn.Linear(dim_1 + self.input_size, dim_2)
+            else:
+                self.d0 = nn.Linear(self.num_embeddings, dim_1)
+                self.d1 = nn.Linear(dim_1 + self.num_embeddings, dim_2)
 
         else:
             self.d0 = nn.Linear(self.input_size, dim_1)
@@ -48,6 +53,8 @@ class ResNet(pl.LightningModule):
 
         # Batch Norm
         if params['embedding']:
+            if params['hidden_len']:
+                self.bn_hidden = nn.BatchNorm1d(params['hidden_len'])
             self.bn0 = nn.BatchNorm1d(self.num_embeddings)
         else:
             self.bn0 = nn.BatchNorm1d(self.input_size)
@@ -57,11 +64,15 @@ class ResNet(pl.LightningModule):
         self.bn4 = nn.BatchNorm1d(dim_4)
         self.bn5 = nn.BatchNorm1d(dim_5)
 
-    def forward(self, x):
+    def forward(self, x, hidden):
         if getattr(self, 'num_embeddings', None):
             x = [emb_lay(x[:, i])
                  for i, emb_lay in enumerate(self.embedding_layers)]
             x = torch.cat(x, 1)
+        if hidden is not None:
+            hidden = self.bn_hidden(hidden)
+            x = torch.cat([x, hidden], 1)
+        # normalise inputs
 
         # block 0
         x1 = self.d0(x)
@@ -107,10 +118,13 @@ class ResNet(pl.LightningModule):
         return out
 
     def training_step(self, batch, batch_idx):
-        x, y = batch['data'], batch['target']
+        x, hidden, y = batch['data'], batch.get(
+            'hidden', None), batch['target']
         x = x.view(x.size(1), -1)
         y = y.T
-        logits = self(x)
+        if hidden is not None:
+            hidden = hidden.view(hidden.size(1), -1)
+        logits = self(x, hidden)
         loss = self.loss(input=logits, target=y)
         mse = mean_squared_error(y_true=y.cpu().numpy(),
                                  y_pred=logits.cpu().detach().numpy())
@@ -120,10 +134,13 @@ class ResNet(pl.LightningModule):
         return {'loss': loss}
 
     def validation_step(self, batch, batch_idx):
-        x, y = batch['data'], batch['target']
+        x, hidden, y = batch['data'], batch.get(
+            'hidden', None), batch['target']
         x = x.view(x.size(1), -1)
         y = y.T
-        logits = self(x)
+        if hidden is not None:
+            hidden = hidden.view(hidden.size(1), -1)
+        logits = self(x, hidden)
         loss = self.loss(input=logits,
                          target=y)
         mse = mean_squared_error(y_true=y.cpu().numpy(),
