@@ -1,4 +1,4 @@
-*.ipynb
+
 *.pkl
 *.xml
 *.env
@@ -17,3 +17,4 @@ example*
 events.*
 *.yaml
 *.bin
+/data
