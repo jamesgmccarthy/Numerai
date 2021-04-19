@@ -2,6 +2,7 @@
 import datetime
 import gc
 import copy
+from models.SupervisedAutoEncoder import create_hidden_rep, train_ae_model
 import datatable as dt
 import joblib
 import lightgbm as lgb
@@ -35,7 +36,7 @@ def optimize(trial: optuna.trial.Trial, data_dict: dict):
     sizes = []
     # gts = GroupTimeSeriesSplit()']
 
-    gts = pgs.PurgedGroupTimeSeriesSplit(n_splits=5, group_gap=10)
+    gts = pgs.PurgedGroupTimeSeriesSplit(n_splits=5, group_gap=5)
     for i, (tr_idx, val_idx) in enumerate(gts.split(data_dict['data'], groups=data_dict['era'])):
         x_tr, x_val = data_dict['data'][tr_idx], data_dict['data'][val_idx]
         y_tr, y_val = data_dict['target'][tr_idx], data_dict['target'][val_idx]
@@ -75,7 +76,7 @@ def loptimize(trial, data_dict: dict):
     scores = []
     sizes = []
     # gts = GroupTimeSeriesSplit()
-    gts = pgs.PurgedGroupTimeSeriesSplit(n_splits=5, group_gap=10)
+    gts = pgs.PurgedGroupTimeSeriesSplit(n_splits=5, group_gap=5)
     for i, (tr_idx, val_idx) in enumerate(gts.split(data_dict['data'], groups=data_dict['era'])):
         sizes.append(len(tr_idx) + len(val_idx))
         x_tr, x_val = data_dict['data'][tr_idx], data_dict['data'][val_idx]
@@ -95,14 +96,37 @@ def loptimize(trial, data_dict: dict):
     return avg_score
 
 
-def main():
-    api_token = 'eyJhcGlfYWRkcmVzcyI6Imh0dHBzOi8vdWkubmVwdHVuZS5haSIsImFwaV91cmwiOiJodHRwczovL3VpLm5lcHR1bmUuYWkiLCJhcGlfa2V5IjoiYWQxMjg3OGEtMGI1NC00NzFmLTg0YmMtZmIxZjcxZDM2NTAxIn0='
+def main(ae_train=False):
+    if ae_train:
+        data = data = utils.load_data('data/', mode='train')
+        data, target, features, era = utils.preprocess_data(data, ordinal=True)
+        test_data = utils.load_data('data/', mode='test')
+        test_data = test_data[test_data['data_type'] == 'validation']
+        test_data, test_target, test_features, test_era = utils.preprocess_data(
+            test_data, ordinal=True)
+        data = np.concatenate([data, test_data], 0)
+        target = np.concatenate([target, test_target], 0)
+        era = np.concatenate([era, test_era], 0)
+        data_dict = {'data':     data, 'target': target,
+                     'features': features, 'era': era}
+        ae_model = train_ae_model(data_dict=data_dict)
+        del data, target, era, data_dict
+        data = utils.load_data('data/', mode='train')
+        data, target, features, era = utils.preprocess_data(
+            data, ordinal=True)
+        data_dict = {'data':     data, 'target': target,
+                     'features': features, 'era': era}
+        ae_output = create_hidden_rep(ae_model, data_dict)
+        data = np.concatenate([data, ae_output['hidden']], axis=1)
+
+    else:
+        data = utils.load_data('data/', mode='train')
+        data, target, features, era = utils.preprocess_data(data, nn=True)
+        data_dict = {'data':     data, 'target': target,
+                     'features': features, 'era': era}
+    api_token = utils.read_api_token()
     neptune.init(api_token=api_token,
                  project_qualified_name='jamesmccarthy65/Numerai')
-    data = utils.load_data('data/', mode='train')
-    data, target, features, era = utils.preprocess_data(data, nn=True)
-    data_dict = {'data':     data, 'target': target,
-                 'features': features, 'era': era}
     print('creating XGBoost Trials')
     xgb_exp = neptune.create_experiment('XGBoost_HPO')
     xgb_neptune_callback = opt_utils.NeptuneCallback(experiment=xgb_exp)
@@ -118,7 +142,7 @@ def main():
     study.optimize(lambda trial: loptimize(trial, data_dict),
                    n_trials=100, callbacks=[lgbm_neptune_callback])
     joblib.dump(
-        study, f'hpo/params/lgb_hpo_{str(datetime.datetime.now().date())}.pkl')
+        study, f'hpo/params/lgb_hpo_ae_{ae_train}_{str(datetime.datetime.now().date())}.pkl')
 
 
 if __name__ == '__main__':

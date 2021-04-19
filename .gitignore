@@ -18,3 +18,5 @@ events.*
 *.yaml
 *.bin
 /data
+*.txt
+*.ipynb

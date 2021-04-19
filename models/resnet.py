@@ -72,7 +72,6 @@ class ResNet(pl.LightningModule):
         if hidden is not None:
             hidden = self.bn_hidden(hidden)
             x = torch.cat([x, hidden], 1)
-        # normalise inputs
 
         # block 0
         x1 = self.d0(x)

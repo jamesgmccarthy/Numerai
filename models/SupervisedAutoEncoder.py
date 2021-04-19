@@ -1,3 +1,4 @@
+import joblib
 import torch
 import torch.nn as nn
 import numpy as np
@@ -14,6 +15,7 @@ class SupAE(pl.LightningModule):
         self.loss_recon = params['loss_recon']()
         self.recon_loss_factor = params['recon_loss_factor']
         self.loss_sup_ae = params['loss_sup_ae']()
+        self.reg_loss = params['loss_reg']()
         self.activation = params['activation']
         self.drop = params['dropout']
         cat_dims = [5 for i in range(params['input_size'])]
@@ -36,11 +38,22 @@ class SupAE(pl.LightningModule):
             nn.Dropout(self.drop),
             nn.Linear(params['dim_3'], params['hidden'])
         )
-        self.regressor = nn.Sequential(
-            nn.BatchNorm1d(params['hidden']),
+        self.MLP = nn.Sequential(
+            nn.BatchNorm1d(self.num_embeddings + params['hidden']),
+            nn.Dropout(self.drop),
+            nn.Linear(self.num_embeddings + params['hidden'], params['dim_1']),
+            nn.BatchNorm1d(params['dim_1']),
             self.activation(),
             nn.Dropout(self.drop),
-            nn.Linear(params['hidden'], params['output_size'])
+            nn.Linear(params['dim_1'], params['dim_2']),
+            nn.BatchNorm1d(params['dim_2']),
+            self.activation(),
+            nn.Dropout(self.drop),
+            nn.Linear(params['dim_2'], params['dim_3']),
+            nn.BatchNorm1d(params['dim_3']),
+            self.activation(),
+            nn.Dropout(self.drop),
+            nn.Linear(params['dim_3'], params['output_size'])
         )
         self.decoder = nn.Sequential(
             nn.Linear(params['hidden'], params['dim_3']),
@@ -57,25 +70,36 @@ class SupAE(pl.LightningModule):
             nn.Dropout(self.drop),
             nn.Linear(params['dim_1'], self.num_embeddings)
         )
+        self.regressor = nn.Sequential(
+            nn.Linear(self.num_embeddings, params['dim_1']),
+            nn.BatchNorm1d(params['dim_1']),
+            self.activation(),
+            nn.Dropout(self.drop),
+            nn.Linear(params['dim_1'], params['output_size'])
+        )
 
     def forward(self, x):
         x = [emb_lay(x[:, i])
              for i, emb_lay in enumerate(self.embedding_layers)]
         emb = torch.cat(x, 1)
         hidden = self.encoder(emb)
-        reg_out = self.regressor(hidden)
+        reg_in = torch.cat([emb, hidden], 1)
+        reg_out = self.MLP(reg_in)
         decoder_out = self.decoder(hidden)
-        return emb, hidden, reg_out, decoder_out
+        sup_ae = self.regressor(decoder_out)
+        return emb, hidden, reg_out, decoder_out, sup_ae
 
     def training_step(self, batch, batch_idx):
         x, y = batch['data'], batch['target']
         x = x.view(x.size(1), -1)
         y = y.T
-        emb, _, reg_out, decoder_out = self(x)
-        sup_loss = self.loss_sup_ae(reg_out, y)
+        emb, _, reg_out, decoder_out, sup_ae = self(x)
+        reg_loss = self.reg_loss(reg_out, y)
+        sup_loss = self.loss_sup_ae(sup_ae, y)
         recon_loss = torch.mean(torch.tensor(
             [self.loss_recon(decoder_out[i], emb[i]) for i in range(x.shape[0])]))
-        loss = sup_loss + self.recon_loss_factor*recon_loss
+        loss = reg_loss + sup_loss + (self.recon_loss_factor * recon_loss)
+        self.log('reg_loss', reg_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('sup_loss', sup_loss, on_step=False,
                  on_epoch=True, prog_bar=True)
         self.log('recon_loss', recon_loss, on_step=False,
@@ -87,23 +111,26 @@ class SupAE(pl.LightningModule):
         x, y = batch['data'], batch['target']
         x = x.view(x.size(1), -1)
         y = y.T
-        emb, _, reg_out, decoder_out = self(x)
-        sup_loss = self.loss_sup_ae(reg_out, y)
+        emb, _, reg_out, decoder_out, sup_ae = self(x)
+        reg_loss = self.reg_loss(reg_out, y)
+        sup_loss = self.loss_sup_ae(sup_ae, y)
         recon_loss = torch.mean(torch.tensor(
             [self.loss_recon(decoder_out[i], emb[i]) for i in range(x.shape[0])]))
-        loss = sup_loss + self.recon_loss_factor*recon_loss
+        loss = reg_loss + sup_loss + (self.recon_loss_factor * recon_loss)
         """
         self.log('sup_loss', sup_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('recon_loss', recon_loss, on_step=False, on_epoch=True, prog_bar=True)
         self.log('loss', loss, on_step=False, on_epoch=True, prog_bar=True)
         """
-        return {'val_loss': loss, 'val_sup_loss': sup_loss}
+        return {'val_loss': loss, 'val_sup_loss': sup_loss, 'val_reg_loss': reg_loss}
 
     def validation_epoch_end(self, outputs) -> None:
         epoch_loss = torch.tensor([x['val_loss'] for x in outputs]).mean()
         epoch_sup_loss = torch.tensor(
             [x['val_sup_loss'] for x in outputs]).mean()
+        epoch_reg_loss = torch.tensor([x['val_reg_loss'] for x in outputs]).mean()
         self.log('val_loss', epoch_loss, prog_bar=True)
+        self.log('val_reg_loss', epoch_reg_loss, prog_bar=True)
         self.log('val_sup_loss', epoch_sup_loss, prog_bar=True)
 
     def configure_optimizers(self):
@@ -117,21 +144,22 @@ class SupAE(pl.LightningModule):
 
 def train_ae_model(data_dict):
     # TODO Dynamic
-    p = {'dim_1': 675, 'dim_2': 400, 'dim_3': 224, 'hidden': 162,
-         'activation': nn.ReLU, 'dropout': 0.2916447561918717, 'lr': 0.030272591341587315,
-         'recon_loss_factor': 0.4447516076774931, 'batch_size': 1252, 'loss_sup_ae': nn.MSELoss,
-         'loss_recon': nn.MSELoss,
-         'embedding': True}
-    # TODO Fix this
-    train_idx = np.arange(start=0, stop=452205, step=1, dtype=np.int).tolist()
-    val_idx = np.arange(start=452206, stop=len(
-        data_dict['data']), step=1, dtype=np.int).tolist()
+    p = joblib.load('./hpo/params/ae_sup_params.pkl').best_params
+    act_dict = {'relu': nn.ReLU, 'leaky_relu': nn.LeakyReLU,
+                'gelu': nn.GELU, 'silu': nn.SiLU}
+    p['activation'] = act_dict[p['activation']]
+    p['loss_sup_ae'] = nn.MSELoss
+    p['loss_recon'] = nn.MSELoss
+    p['embedding'] = True
+    # if %
+    t_idx = np.where(data_dict['era'] < 121)[0].tolist()
+    v_idx = np.where(data_dict['era'] >= 121)[0].tolist()
     p['input_size'] = len(data_dict['features'])
     p['output_size'] = 1
     dataset = utils.FinData(
         data=data_dict['data'], target=data_dict['target'], era=data_dict['era'])
     dataloaders = utils.create_dataloaders(dataset=dataset, indexes={
-                                           'train': train_idx, 'val': val_idx}, batch_size=p['batch_size'])
+        'train': t_idx, 'val': v_idx}, batch_size=p['batch_size'])
     model = SupAE(p)
     es = EarlyStopping(monitor='val_loss', patience=10,
                        min_delta=0.005, mode='min')
@@ -147,10 +175,10 @@ def train_ae_model(data_dict):
 def create_hidden_rep(model, data_dict):
     model.eval()
     index = np.linspace(
-        0, data_dict['data'].shape[0], data_dict['data'].shape[0], dtype='int').tolist()
+        0, data_dict['data'].shape[0] - 1, data_dict['data'].shape[0], dtype='int').tolist()
     dataset = utils.FinData(
         data_dict['data'], target=data_dict['target'], era=data_dict['era'])
-    batch_size = 5000
+    batch_size = 4000
     dataloaders = utils.create_dataloaders(
         dataset, {'train': index}, batch_size=batch_size)
     hiddens = []
