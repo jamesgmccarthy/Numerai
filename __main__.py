@@ -40,7 +40,7 @@ def main():
     keys['LATEST_ROUND'] = download_data(numapi, keys)
     update_env_file(keys)
     # gbm_hpo.main()
-    ae_hpo.main()
+    # ae_hpo.main(embedding=False)
     # gbm_hpo.main(ae_train=True)
     # nn_hpo.main(train_ae=True)
 

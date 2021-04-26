@@ -43,30 +43,26 @@ def create_param_dict(trial, trial_file=None):
                     'gelu': nn.GELU, 'silu': nn.SiLU}
         act_func = act_dict[act_func]
         dropout = trial.suggest_uniform('dropout', 0.05, 0.5)
+        dropout_ae = trial.suggest_uniform('dropout_ae', 0.05, 0.25)
         lr = trial.suggest_uniform('lr', 0.00005, 0.05)
         recon_loss_factor = trial.suggest_uniform('recon_loss_factor', 0.1, 1)
         p = {'dim_1':      dim_1, 'dim_2': dim_2, 'dim_3': dim_3, 'hidden': hidden,
-             'activation': act_func, 'dropout': dropout,
+             'activation': act_func, 'dropout': dropout, 'dropout_ae': dropout_ae,
              'lr':         lr, 'recon_loss_factor': recon_loss_factor, 'loss_sup_ae': nn.MSELoss,
-             'loss_recon': nn.MSELoss, 'loss_reg': nn.MSELoss,
-             'embedding':  True}
-    elif trial and trial_file:
+             'loss_recon': nn.MSELoss, 'loss_reg': nn.MSELoss}
+    elif not trial and trial_file:
         p = joblib.load(trial_file).best_params
-        if not p.get('dim_5', None):
-            p['dim_5'] = 75
-        act_dict = {'relu':       nn.ReLU,
-                    'leaky_relu': nn.LeakyReLU, 'gelu': nn.GELU}
-        act_func = trial.suggest_categorical(
-            'activation', ['leaky_relu', 'gelu'])
+        act_dict = {'relu': nn.ReLU, 'leaky_relu': nn.LeakyReLU,
+                    'gelu': nn.GELU, 'silu': nn.SiLU}
         p['activation'] = act_dict[p['activation']]
     return p
 
 
-def optimize(trial: optuna.Trial, data_dict):
+def optimize(trial: optuna.Trial, data_dict, embedding=False):
     gts = PurgedGroupTimeSeriesSplit(n_splits=5, group_gap=5)
     input_size = data_dict['data'].shape[-1]
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
-        os.path.join('hpo/checkpoints/', "trial_ae_{}".format(trial.number)), monitor="val_sup_loss", mode='min')
+        os.path.join('hpo/checkpoints/', "trial_ae_{}".format(trial.number)), monitor="val_reg_loss", mode='min')
     logger = MetricsCallback()
     metrics = []
     sizes = []
@@ -76,6 +72,7 @@ def optimize(trial: optuna.Trial, data_dict):
     p['batch_size'] = trial.suggest_int('batch_size', 500, 5000)
     p['input_size'] = input_size
     p['output_size'] = 1
+    p['emb'] = embedding
     print(f'Running Trail with params: {p}')
     for i, (train_idx, val_idx) in enumerate(gts.split(data_dict['data'], groups=data_dict['era'])):
         model = SupAE(params=p)
@@ -84,13 +81,13 @@ def optimize(trial: optuna.Trial, data_dict):
             data=data_dict['data'], target=data_dict['target'], era=data_dict['era'])
         dataloaders = create_dataloaders(
             dataset, indexes={'train': train_idx, 'val': val_idx}, batch_size=p['batch_size'])
-        es = EarlyStopping(monitor='val_loss', patience=10,
+        es = EarlyStopping(monitor='val_reg_loss', patience=10,
                            min_delta=0.0005, mode='min')
         trainer = pl.Trainer(logger=False,
                              max_epochs=100,
                              gpus=1,
                              callbacks=[checkpoint_callback, logger, PyTorchLightningPruningCallback(
-                                 trial, monitor='val_sup_loss'), es],
+                                 trial, monitor='val_reg_loss'), es],
                              precision=16)
         trainer.fit(
             model, train_dataloader=dataloaders['train'], val_dataloaders=dataloaders['val'])
@@ -101,11 +98,11 @@ def optimize(trial: optuna.Trial, data_dict):
     return metrics_mean
 
 
-def main():
+def main(embedding=False):
     seed_everything(0)
     data = utils.load_data(root_dir='./data/', mode='train')
     data, target, features, era = preprocess_data(
-        data, ordinal=True)
+        data, ordinal=embedding, nn=(not embedding))
     api_token = utils.read_api_token()
     neptune.init(api_token=api_token,
                  project_qualified_name='jamesmccarthy65/NumeraiV2')
@@ -115,10 +112,14 @@ def main():
     study = optuna.create_study(direction='minimize')
     data_dict = {'data':     data, 'target': target,
                  'features': features, 'era': era}
-    study.optimize(lambda trial: optimize(trial, data_dict=data_dict), n_trials=30,
+    study.optimize(lambda trial: optimize(trial, data_dict=data_dict, embedding=embedding), n_trials=200,
                    callbacks=[nn_neptune_callback])
+    best_params = study.best_params
+    best_params['emb'] = embedding
+    best_params['input_size'] = data_dict['data'].shape[-1]
+    best_params['output_size'] = 1
     joblib.dump(
-        study, f'./hpo/params/ae_sup_params.pkl')
+        best_params, f'./hpo/params/ae_sup_params_{datetime.date.today()}.pkl')
 
 
 if __name__ == '__main__':

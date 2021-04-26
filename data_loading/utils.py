@@ -40,14 +40,14 @@ class FinData(Dataset):
             if type(self.target) is not np.ndarray:
                 sample = {
                     'target': torch.Tensor(self.target[index].values),
-                    'data':   torch.LongTensor(self.data[index]),
+                    'data':   torch.Tensor(self.data[index]),
                     'era':    torch.Tensor(self.era[index].values),
                 }
             else:
                 sample = {
-                    'target': torch.Tensor(self.target[index], dtype=np.float16),
-                    'data':   torch.LongTensor(self.data[index], dtype=np.float16),
-                    'era':    torch.Tensor(self.era[index], dtype=np.float16),
+                    'target': torch.Tensor(self.target[index]),
+                    'data':   torch.Tensor(self.data[index]),
+                    'era':    torch.Tensor(self.era[index]),
                 }
             if self.hidden is not None:
                 sample['hidden'] = torch.Tensor(self.hidden[index])
@@ -300,17 +300,20 @@ def create_predictions(root_dir: str = './data', models: dict = {}, hidden=True,
                 len(predictions)) for j in range(len(predictions[i]))])
             df['prediction_resnet'] = predictions
         if models.get('xgb', None):
-            model_xgboost = models['xgb'][0]
-            p_xgboost = models['xgb'][1]
+            model_xgboost_1 = models['xgb'][0]
+            model_xgboost_2 = models['xgb'][1]
             x_val = data_dict['data']
-            df['prediction_xgb'] = model_xgboost.predict(xgb.DMatrix(x_val))
+            preds_1 = model_xgboost_1.predict(xgb.DMatrix(x_val))
+            preds_2 = model_xgboost_2.predict(xgb.DMatrix(x_val))
+            df['prediction_xgb'] = np.mean([0.55*preds_1 + 0.45 * preds_2], 0)
         if models.get('lgb', None):
             model_lgb = models['lgb'][0]
-            p_lgb = models['lgb'][1]
+            model_lgb_2 = models['lgb'][1]
             x_val = data_dict['data']
-            df['prediction_lgb'] = model_lgb.predict(x_val)
-        df['prediction'] = np.mean(
-            [(0.45 * df['prediction_xgb'] + 0.55 * df['prediction_lgb'])], 0)
+            pred_1 = model_lgb.predict(x_val)
+            preds_2 = model_lgb_2.predict(x_val)
+            df['prediction_lgb'] = np.mean([0.55*preds_1 + 0.45 * preds_2], 0)
+        df['prediction'] = df['prediction_xgb']
         df = df[['id', 'prediction']]
         pred_path = f'{get_data_path(root_dir)}/predictions/{era[0]}'
         df.to_csv(f'{pred_path}.csv')

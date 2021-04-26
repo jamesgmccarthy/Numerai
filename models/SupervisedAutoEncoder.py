@@ -4,6 +4,8 @@ import torch.nn as nn
 import numpy as np
 import pytorch_lightning as pl
 from sklearn.metrics import mean_squared_error, mean_absolute_error
+from torch.nn.modules import dropout
+from torch.nn.modules.batchnorm import BatchNorm1d
 from data_loading import utils
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
@@ -18,30 +20,30 @@ class SupAE(pl.LightningModule):
         self.reg_loss = params['loss_reg']()
         self.activation = params['activation']
         self.drop = params['dropout']
-        cat_dims = [5 for i in range(params['input_size'])]
-        emb_dims = [(x, min(50, (x + 1) // 2)) for x in cat_dims]
-        self.embedding_layers = nn.ModuleList(
-            [nn.Embedding(x, y) for x, y in emb_dims]).to(self.device)
-        self.num_embeddings = sum([y for x, y in emb_dims])
+        self.drop_ae = params['dropout_ae']
+        self.emb = params['emb']
+        if self.emb:
+            cat_dims = [5 for i in range(params['input_size'])]
+            emb_dims = [(x, min(50, (x + 1) // 2)) for x in cat_dims]
+            self.embedding_layers = nn.ModuleList(
+                [nn.Embedding(x, y) for x, y in emb_dims]).to(self.device)
+            self.input_size = sum([y for x, y in emb_dims])
+        else:
+            self.input_size = params['input_size']
         self.encoder = nn.Sequential(
-            nn.Linear(self.num_embeddings, params['dim_1']),
+            nn.Linear(self.input_size, params['dim_1']),
             nn.BatchNorm1d(params['dim_1']),
             self.activation(),
-            nn.Dropout(self.drop),
+            nn.Dropout(self.drop_ae),
             nn.Linear(params['dim_1'], params['dim_2']),
             nn.BatchNorm1d(params['dim_2']),
             self.activation(),
-            nn.Dropout(self.drop),
-            nn.Linear(params['dim_2'], params['dim_3']),
-            nn.BatchNorm1d(params['dim_3']),
-            self.activation(),
-            nn.Dropout(self.drop),
-            nn.Linear(params['dim_3'], params['hidden'])
+            nn.Linear(params['dim_2'], params['hidden']),
         )
         self.MLP = nn.Sequential(
-            nn.BatchNorm1d(self.num_embeddings + params['hidden']),
+            nn.BatchNorm1d(self.input_size + params['hidden']),
             nn.Dropout(self.drop),
-            nn.Linear(self.num_embeddings + params['hidden'], params['dim_1']),
+            nn.Linear(self.input_size + params['hidden'], params['dim_1']),
             nn.BatchNorm1d(params['dim_1']),
             self.activation(),
             nn.Dropout(self.drop),
@@ -56,22 +58,17 @@ class SupAE(pl.LightningModule):
             nn.Linear(params['dim_3'], params['output_size'])
         )
         self.decoder = nn.Sequential(
-            nn.Linear(params['hidden'], params['dim_3']),
-            nn.BatchNorm1d(params['dim_3']),
-            self.activation(),
             nn.Dropout(self.drop),
-            nn.Linear(params['dim_3'], params['dim_2']),
+            nn.Linear(params['hidden'], params['dim_2']),
             nn.BatchNorm1d(params['dim_2']),
             self.activation(),
-            nn.Dropout(self.drop),
+            nn.Dropout(self.drop_ae),
             nn.Linear(params['dim_2'], params['dim_1']),
-            nn.BatchNorm1d(params['dim_1']),
-            self.activation(),
-            nn.Dropout(self.drop),
-            nn.Linear(params['dim_1'], self.num_embeddings)
+            nn.Dropout(self.drop_ae),
+            nn.Linear(params['dim_1'], self.input_size)
         )
         self.regressor = nn.Sequential(
-            nn.Linear(self.num_embeddings, params['dim_1']),
+            nn.Linear(self.input_size, params['dim_1']),
             nn.BatchNorm1d(params['dim_1']),
             self.activation(),
             nn.Dropout(self.drop),
@@ -79,27 +76,32 @@ class SupAE(pl.LightningModule):
         )
 
     def forward(self, x):
-        x = [emb_lay(x[:, i])
-             for i, emb_lay in enumerate(self.embedding_layers)]
-        emb = torch.cat(x, 1)
-        hidden = self.encoder(emb)
-        reg_in = torch.cat([emb, hidden], 1)
+        if self.emb:
+            x = [emb_lay(x[:, i])
+                 for i, emb_lay in enumerate(self.embedding_layers)]
+            x = torch.cat(x, 1)
+        hidden = self.encoder(x)
+        reg_in = torch.cat([x, hidden], 1)
         reg_out = self.MLP(reg_in)
         decoder_out = self.decoder(hidden)
         sup_ae = self.regressor(decoder_out)
-        return emb, hidden, reg_out, decoder_out, sup_ae
+        return x, hidden, reg_out, decoder_out, sup_ae
 
     def training_step(self, batch, batch_idx):
         x, y = batch['data'], batch['target']
         x = x.view(x.size(1), -1)
         y = y.T
-        emb, _, reg_out, decoder_out, sup_ae = self(x)
+        x_ae, _, reg_out, decoder_out, sup_ae = self(x)
         reg_loss = self.reg_loss(reg_out, y)
         sup_loss = self.loss_sup_ae(sup_ae, y)
-        recon_loss = torch.mean(torch.tensor(
-            [self.loss_recon(decoder_out[i], emb[i]) for i in range(x.shape[0])]))
+        if self.emb:
+            recon_loss = torch.mean(torch.tensor(
+                [self.loss_recon(decoder_out[i], x_ae[i]) for i in range(x.shape[0])]))
+        else:
+            recon_loss = self.loss_recon(decoder_out, x_ae)
         loss = reg_loss + sup_loss + (self.recon_loss_factor * recon_loss)
-        self.log('reg_loss', reg_loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log('reg_loss', reg_loss, on_step=False,
+                 on_epoch=True, prog_bar=True)
         self.log('sup_loss', sup_loss, on_step=False,
                  on_epoch=True, prog_bar=True)
         self.log('recon_loss', recon_loss, on_step=False,
@@ -111,11 +113,14 @@ class SupAE(pl.LightningModule):
         x, y = batch['data'], batch['target']
         x = x.view(x.size(1), -1)
         y = y.T
-        emb, _, reg_out, decoder_out, sup_ae = self(x)
+        x_ae, _, reg_out, decoder_out, sup_ae = self(x)
         reg_loss = self.reg_loss(reg_out, y)
         sup_loss = self.loss_sup_ae(sup_ae, y)
-        recon_loss = torch.mean(torch.tensor(
-            [self.loss_recon(decoder_out[i], emb[i]) for i in range(x.shape[0])]))
+        if self.emb:
+            recon_loss = torch.mean(torch.tensor(
+                [self.loss_recon(decoder_out[i], x_ae[i]) for i in range(x.shape[0])]))
+        else:
+            recon_loss = self.loss_recon(decoder_out, x_ae)
         loss = reg_loss + sup_loss + (self.recon_loss_factor * recon_loss)
         """
         self.log('sup_loss', sup_loss, on_step=False, on_epoch=True, prog_bar=True)
@@ -128,7 +133,8 @@ class SupAE(pl.LightningModule):
         epoch_loss = torch.tensor([x['val_loss'] for x in outputs]).mean()
         epoch_sup_loss = torch.tensor(
             [x['val_sup_loss'] for x in outputs]).mean()
-        epoch_reg_loss = torch.tensor([x['val_reg_loss'] for x in outputs]).mean()
+        epoch_reg_loss = torch.tensor(
+            [x['val_reg_loss'] for x in outputs]).mean()
         self.log('val_loss', epoch_loss, prog_bar=True)
         self.log('val_reg_loss', epoch_reg_loss, prog_bar=True)
         self.log('val_sup_loss', epoch_sup_loss, prog_bar=True)
@@ -150,7 +156,7 @@ def train_ae_model(data_dict):
     p['activation'] = act_dict[p['activation']]
     p['loss_sup_ae'] = nn.MSELoss
     p['loss_recon'] = nn.MSELoss
-    p['embedding'] = True
+    p['embedding'] = False
     # if %
     t_idx = np.where(data_dict['era'] < 121)[0].tolist()
     v_idx = np.where(data_dict['era'] >= 121)[0].tolist()
