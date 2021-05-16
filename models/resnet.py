@@ -2,6 +2,7 @@ import torch
 import copy
 import os
 import numpy as np
+import pandas as pd
 import pytorch_lightning as pl
 import torch.nn as nn
 from sklearn.metrics import mean_squared_error
@@ -11,10 +12,13 @@ from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 
 from data_loading.purged_group_time_series import PurgedGroupTimeSeriesSplit
 from data_loading.utils import load_data, preprocess_data, FinData, create_dataloaders, calc_data_mean, init_weights
+from metrics.corr_loss_function import CorrLoss, SpearmanLoss
+from torchinfo import summary
+from sklearn.model_selection import GroupKFold
 
 
 class ResNet(pl.LightningModule):
-    def __init__(self, input_size, output_size, params):
+    def __init__(self, params):
         super(ResNet, self).__init__()
         dim_1 = params['dim_1']
         dim_2 = params['dim_2']
@@ -25,11 +29,12 @@ class ResNet(pl.LightningModule):
         self.drop = nn.Dropout(self.drop_prob)
         self.lr = params['lr']
         self.activation = params['activation']()
-        self.input_size = input_size
-        self.output_size = output_size
+        self.input_size = len(params['features'])
+        self.output_size = 1
         self.loss = params['loss']()
+        self.corr_loss = params['corr_loss']()
         if params['embedding']:
-            cat_dims = [5 for i in range(input_size)]
+            cat_dims = [5 for i in range(self.input_size)]
             emb_dims = [(x, min(50, (x + 1) // 2)) for x in cat_dims]
             self.embedding_layers = nn.ModuleList(
                 [nn.Embedding(x, y) for x, y in emb_dims]).to(self.device)
@@ -44,12 +49,12 @@ class ResNet(pl.LightningModule):
 
         else:
             self.d0 = nn.Linear(self.input_size, dim_1)
-            self.d1 = nn.Linear(dim_1+self.input_size, dim_2)
+            self.d1 = nn.Linear(dim_1 + self.input_size, dim_2)
 
         self.d2 = nn.Linear(dim_2 + dim_1, dim_3)
         self.d3 = nn.Linear(dim_3 + dim_2, dim_4)
         self.d4 = nn.Linear(dim_4 + dim_3, dim_5)
-        self.out = nn.Linear(dim_4+dim_5, output_size)
+        self.out = nn.Linear(dim_4 + dim_5, self.output_size)
 
         # Batch Norm
         if params['embedding']:
@@ -64,7 +69,8 @@ class ResNet(pl.LightningModule):
         self.bn4 = nn.BatchNorm1d(dim_4)
         self.bn5 = nn.BatchNorm1d(dim_5)
 
-    def forward(self, x, hidden):
+    def forward(self, x, hidden=None):
+        x = self.bn0(x)
         if getattr(self, 'num_embeddings', None):
             x = [emb_lay(x[:, i])
                  for i, emb_lay in enumerate(self.embedding_layers)]
@@ -125,11 +131,12 @@ class ResNet(pl.LightningModule):
             hidden = hidden.view(hidden.size(1), -1)
         logits = self(x, hidden)
         loss = self.loss(input=logits, target=y)
-        mse = mean_squared_error(y_true=y.cpu().numpy(),
-                                 y_pred=logits.cpu().detach().numpy())
-        self.log('train_mse', mse, on_step=False,
-                 on_epoch=True, prog_bar=True)
-        self.log('train_loss', loss, prog_bar=True)
+        corr = self.corr_loss(input=logits, target=y).cuda()
+        loss += (1 - corr) * 0.05
+        self.log('train_loss', loss, prog_bar=True,
+                 on_epoch=True, on_step=False)
+        self.log('train_corr', corr, prog_bar=True,
+                 on_epoch=True, on_step=False)
         return {'loss': loss}
 
     def validation_step(self, batch, batch_idx):
@@ -140,26 +147,25 @@ class ResNet(pl.LightningModule):
         if hidden is not None:
             hidden = hidden.view(hidden.size(1), -1)
         logits = self(x, hidden)
-        loss = self.loss(input=logits,
-                         target=y)
-        mse = mean_squared_error(y_true=y.cpu().numpy(),
-                                 y_pred=logits.cpu().detach().numpy())
-        return {'loss': loss, 'y': y, 'logits': logits, 'mse': mse}
+        loss = self.loss(input=logits, target=y)
+        corr = self.corr_loss(input=logits, target=y).cuda()
+        loss += (1 - corr) * 0.05
+        return {'val_loss': loss, 'val_corr': corr}
 
     def validation_epoch_end(self, val_step_outputs):
-        epoch_loss = torch.tensor([x['loss'] for x in val_step_outputs]).mean()
-        epoch_mse = torch.tensor([x['mse'] for x in val_step_outputs]).mean()
+        epoch_loss = torch.tensor([x['val_loss']
+                                   for x in val_step_outputs]).mean()
+        epoch_corr = torch.tensor([x['val_corr']
+                                   for x in val_step_outputs]).mean()
         self.log('val_loss', epoch_loss, prog_bar=True)
-        self.log('val_mse', epoch_mse, prog_bar=True)
+        self.log('val_corr', epoch_corr, prog_bar=True)
 
     def test_step(self, batch, batch_idx):
         return self.validation_step(batch, batch_idx)
 
     def test_epoch_end(self, outputs):
-        epoch_loss = torch.tensor([x['loss'] for x in outputs]).mean()
-        epoch_mse = torch.tensor([x['mse'] for x in outputs]).mean()
+        epoch_loss = torch.tensor([x['val_loss'] for x in outputs]).mean()
         self.log('test_loss', epoch_loss)
-        self.log('test_auc', epoch_mse)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(
@@ -167,102 +173,104 @@ class ResNet(pl.LightningModule):
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, patience=5, factor=0.1, min_lr=1e-7, eps=1e-08
         )
-        return {'optimizer': optimizer, 'lr_scheduler': scheduler, 'monitor': 'val_mse'}
+        return {'optimizer': optimizer, 'lr_scheduler': scheduler, 'monitor': 'val_loss'}
 
 
-def cross_val(p) -> object:
-    data_ = load_data(root_dir='./data/', mode='train')
-    data_, target_, features, date = preprocess_data(
-        data_, nn=True, action='multi')
-    input_size = data_.shape[-1]
-    output_size = target_.shape[-1]
-    gts = PurgedGroupTimeSeriesSplit(n_splits=5, group_gap=5)
-    models = []
-    tb_logger = pl_loggers.TensorBoardLogger('logs/multiclass_')
-    for i, (train_idx, val_idx) in enumerate(gts.split(data_, groups=date)):
-        idx = np.concatenate([train_idx, val_idx])
-        data = copy.deepcopy(data_[idx])
-        target = copy.deepcopy(target_[idx])
-        checkpoint_callback = pl.callbacks.ModelCheckpoint(
-            os.path.join('models/', 'multi_class_fold_{}'.format(i)), monitor='val_auc', save_top_k=1, period=10,
-            mode='max'
-        )
-        model = ResNet(input_size, output_size, p)
+def correlation(predictions, targets):
+    ranked_preds = predictions.rank(pct=True, method="first")
+    return np.corrcoef(ranked_preds, targets)[0, 1]
+
+
+# convenience method for scoring
+def scoring(df):
+    return correlation(df['preds'], df['target'])
+
+
+# Payout is just the score cliped at +/-25%
+def payout(scores):
+    return scores.clip(lower=-0.25, upper=0.25)
+
+
+def cross_val(p) -> dict:
+    data = load_data(root_dir='./data/', mode='train')
+    data, target, features, era = preprocess_data(
+        data, nn=True)
+    data_dict = {'data':     data, 'target': target,
+                 'features': features, 'era': era}
+    p['features'] = [feat for feat in range(len(data_dict['features']))]
+    gts = GroupKFold(n_splits=10)
+    models = {}
+    for i, (train_idx, val_idx) in enumerate(gts.split(data, groups=era)):
+        checkpoint_callback = pl.callbacks.ModelCheckpoint(dirpath='./lightning_logs', monitor='val_loss',
+                                                           save_top_k=1, period=10,
+                                                           mode='min'
+                                                           )
+        model = ResNet(p)
         if p['activation'] == nn.ReLU:
             model.apply(lambda m: init_weights(m, 'relu'))
         elif p['activation'] == nn.LeakyReLU:
             model.apply(lambda m: init_weights(m, 'leaky_relu'))
-        train_idx = [i for i in range(0, max(train_idx) + 1)]
-        val_idx = [i for i in range(len(train_idx), len(idx))]
-        data[train_idx] = calc_data_mean(
-            data[train_idx], './cache', train=True, mode='mean')
-        data[val_idx] = calc_data_mean(
-            data[val_idx], './cache', train=False, mode='mean')
-        dataset = FinData(data=data, target=target, date=date, multi=True)
-        dataloaders = create_dataloaders(
-            dataset, indexes={'train': train_idx, 'val': val_idx}, batch_size=p['batch_size'])
-        es = EarlyStopping(monitor='val_auc', patience=10,
-                           min_delta=0.0005, mode='max')
-        trainer = pl.Trainer(logger=tb_logger,
-                             max_epochs=100,
+        dataset = FinData(data=data, target=target, era=era)
+        data_loaders = create_dataloaders(
+            dataset, indexes={'train': train_idx.tolist(), 'val': val_idx.tolist()}, batch_size=p['batch_size'])
+        es = EarlyStopping(monitor='val_loss', patience=10,
+                           min_delta=0.000005, mode='min')
+        trainer = pl.Trainer(max_epochs=100,
                              gpus=1,
-                             callbacks=[checkpoint_callback, es],
-                             precision=16)
+                             callbacks=[checkpoint_callback, es])
         trainer.fit(
-            model, train_dataloader=dataloaders['train'], val_dataloaders=dataloaders['val'])
-        torch.save(model.state_dict(), f'models/fold_{i}_state_dict.pth')
-        models.append(model)
-    return models, features
-
-
-def fillna_npwhere(array, values):
-    if np.isnan(array.sum()):
-        array = np.nan_to_num(array) + np.isnan(array) * values
-    return array
-
-
-def test_model(models, features, cache_dir='cache'):
-    env = janestreet.make_env()
-    iter_test = env.iter_test()
-    if type(models) == list:
-        models = [model.eval() for model in models]
-    else:
-        models.eval()
-    f_mean = np.load(f'{cache_dir}/f_mean.npy')
-    for (test_df, sample_prediction_df) in tqdm(iter_test):
-        if test_df['weight'].item() > 0:
-            vals = torch.FloatTensor(
-                fillna_npwhere(test_df[features].values, f_mean))
-            if type(models) == list:
-                # calc mean of each models prediction of each response rather than mean of all predicted responses by each model
-                preds = [torch.sigmoid(model.forward(vals.view(1, -1))).detach().numpy()
-                         for model in models]
-                pred = np.mean(np.mean(preds, axis=0))
-            else:
-                pred = torch.sigmoid(models.forward(vals.view(1, -1))).item()
-            sample_prediction_df.action = np.where(
-                pred > 0.5, 1, 0).astype(int).item()
-        else:
-            sample_prediction_df.action = 0
-        env.predict(sample_prediction_df)
+            model, train_dataloader=data_loaders['train'], val_dataloaders=data_loaders['val'])
+        best_model = ResNet.load_from_checkpoint(
+            checkpoint_callback.best_model_path, params=p)
+        models[f'fold_{i}'] = best_model
+        torch.save(model.state_dict(), f'./saved_models/ResNet/cross_val_{i}.pkl')
+    return models
 
 
 def main():
-    p = {'dim_1': 167,
-         'dim_2': 454,
-         'dim_3': 371,
-         'dim_4': 369,
-         'dim_5': 155,
-         'activation': nn.LeakyReLU,
-         'dropout': 0.21062362698532755,
-         'lr': 0.0022252024054478523,
+    p = {'dim_1':           500,
+         'dim_2':           600,
+         'dim_3':           500,
+         'dim_4':           250,
+         'dim_5':           50,
+         'activation':      nn.LeakyReLU,
+         'dropout':         0.21062362698532755,
+         'lr':              0.0022252024054478523,
          'label_smoothing': 0.05564974140461841,
-         'weight_decay': 0.04106097088288333,
-         'amsgrad': True,
-         'batch_size': 10072}
-    models, features = cross_val(p)
-    test_model(models, features)
+         'weight_decay':    0.04106097088288333,
+         'amsgrad':         True,
+         'batch_size':      10072,
+         'loss':            nn.MSELoss,
+         'corr_loss':       CorrLoss,
+         'embedding':       False}
+    models = cross_val(p)
+    data = load_data(root_dir='./data', mode='test')
+    data = data[data['data_type'] == 'validation']
+    data, target, features, era = preprocess_data(data, nn=True)
+    data = torch.Tensor(data)
+    preds = []
+    for i, (key, model) in enumerate(models.items()):
+        model.eval()
+        pred = model(data)
+        preds.append(pred.detach().cpu().numpy().reshape(-1))
 
+    preds = np.mean(preds, axis=1)
+    df_preds = pd.DataFrame.from_dict(
+        {'era': era, 'pred': preds, 'target': target})
+    corr_per_era = df_preds.groupby('era')[['pred', 'target']].apply(
+        lambda x: correlation(x['pred'], x['target']))
+    sharpe_ratio = corr_per_era.mean() / corr_per_era.std()
+    rolling_max = (corr_per_era +
+                   1).cumprod().rolling(window=100, min_periods=1).max()
+    daily_values = (corr_per_era + 1).cumprod()
+    max_drawdown = (rolling_max - daily_values).max()
+    mean_squared_error_ = mean_squared_error(
+        df_preds['target'], df_preds['pred'])
+    print("preds", preds)
+    print("Corr_mean", corr_per_era.mean())
+    print("Sharpe", sharpe_ratio)
+    print("Max Drawdown", max_drawdown)
+    print('mean_squared_error', mean_squared_error_)
 
-if __name__ == '__main__':
-    main()
+    if __name__ == '__main__':
+        main()

@@ -1,6 +1,7 @@
 import joblib
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 import pytorch_lightning as pl
 from sklearn.metrics import mean_squared_error, mean_absolute_error
@@ -31,18 +32,17 @@ class SupAE(pl.LightningModule):
         else:
             self.input_size = params['input_size']
         self.encoder = nn.Sequential(
-            nn.Linear(self.input_size, params['dim_1']),
-            nn.BatchNorm1d(params['dim_1']),
+            nn.BatchNorm1d(self.input_size),
+            nn.Linear(self.input_size, params['hidden']),
+            nn.BatchNorm1d(params['hidden']),
             self.activation(),
-            nn.Dropout(self.drop_ae),
-            nn.Linear(params['dim_1'], params['dim_2']),
-            nn.BatchNorm1d(params['dim_2']),
-            self.activation(),
-            nn.Linear(params['dim_2'], params['hidden']),
+            # nn.Dropout(self.drop_ae),
+            # nn.Linear(params['dim_1'], params['dim_2']),
+            # nn.BatchNorm1d(params['dim_2']),
+            # self.activation(),
+            # nn.Linear(params['dim_2'], params['hidden']),
         )
         self.MLP = nn.Sequential(
-            nn.BatchNorm1d(self.input_size + params['hidden']),
-            nn.Dropout(self.drop),
             nn.Linear(self.input_size + params['hidden'], params['dim_1']),
             nn.BatchNorm1d(params['dim_1']),
             self.activation(),
@@ -59,20 +59,22 @@ class SupAE(pl.LightningModule):
         )
         self.decoder = nn.Sequential(
             nn.Dropout(self.drop),
-            nn.Linear(params['hidden'], params['dim_2']),
-            nn.BatchNorm1d(params['dim_2']),
-            self.activation(),
-            nn.Dropout(self.drop_ae),
-            nn.Linear(params['dim_2'], params['dim_1']),
-            nn.Dropout(self.drop_ae),
-            nn.Linear(params['dim_1'], self.input_size)
+            nn.Linear(params['hidden'], self.input_size)
         )
+        """
+       nn.BatchNorm1d(params['dim_2']),
+       self.activation(),
+       nn.Dropout(self.drop_ae),
+       nn.Linear(params['dim_2'], params['dim_1']),
+       nn.Dropout(self.drop_ae),
+       nn.Linear(params['dim_1'], self.input_size)
+       """
         self.regressor = nn.Sequential(
-            nn.Linear(self.input_size, params['dim_1']),
-            nn.BatchNorm1d(params['dim_1']),
+            nn.Linear(self.input_size, params['hidden']),
+            nn.BatchNorm1d(params['hidden']),
             self.activation(),
             nn.Dropout(self.drop),
-            nn.Linear(params['dim_1'], params['output_size'])
+            nn.Linear(params['hidden'], params['output_size'])
         )
 
     def forward(self, x):
@@ -81,24 +83,26 @@ class SupAE(pl.LightningModule):
                  for i, emb_lay in enumerate(self.embedding_layers)]
             x = torch.cat(x, 1)
         hidden = self.encoder(x)
-        reg_in = torch.cat([x, hidden], 1)
-        reg_out = self.MLP(reg_in)
         decoder_out = self.decoder(hidden)
         sup_ae = self.regressor(decoder_out)
-        return x, hidden, reg_out, decoder_out, sup_ae
+        x = nn.BatchNorm1d(self.input_size).to('cuda')(x)
+        x = nn.Dropout(self.drop).to('cuda')(x)
+        reg_in = torch.cat([x, hidden], 1)
+        reg_out = self.MLP(reg_in)
+        return hidden, decoder_out, sup_ae, reg_out
 
     def training_step(self, batch, batch_idx):
         x, y = batch['data'], batch['target']
         x = x.view(x.size(1), -1)
         y = y.T
-        x_ae, _, reg_out, decoder_out, sup_ae = self(x)
-        reg_loss = self.reg_loss(reg_out, y)
-        sup_loss = self.loss_sup_ae(sup_ae, y)
+        embedding, decoder_out, sup_ae, reg_out = self(x)
         if self.emb:
             recon_loss = torch.mean(torch.tensor(
-                [self.loss_recon(decoder_out[i], x_ae[i]) for i in range(x.shape[0])]))
+                [self.loss_recon(decoder_out[i], x[i]) for i in range(x.shape[0])]))
         else:
-            recon_loss = self.loss_recon(decoder_out, x_ae)
+            recon_loss = self.loss_recon(decoder_out, x)
+        sup_loss = self.loss_sup_ae(sup_ae, y)
+        reg_loss = self.reg_loss(reg_out, y)
         loss = reg_loss + sup_loss + (self.recon_loss_factor * recon_loss)
         self.log('reg_loss', reg_loss, on_step=False,
                  on_epoch=True, prog_bar=True)
@@ -113,21 +117,16 @@ class SupAE(pl.LightningModule):
         x, y = batch['data'], batch['target']
         x = x.view(x.size(1), -1)
         y = y.T
-        x_ae, _, reg_out, decoder_out, sup_ae = self(x)
-        reg_loss = self.reg_loss(reg_out, y)
-        sup_loss = self.loss_sup_ae(sup_ae, y)
+        embedding, decoder_out, sup_ae, reg_out = self(x)
         if self.emb:
             recon_loss = torch.mean(torch.tensor(
-                [self.loss_recon(decoder_out[i], x_ae[i]) for i in range(x.shape[0])]))
+                [self.loss_recon(decoder_out[i], x[i]) for i in range(x.shape[0])]))
         else:
-            recon_loss = self.loss_recon(decoder_out, x_ae)
+            recon_loss = self.loss_recon(decoder_out, x)
+        sup_loss = self.loss_sup_ae(sup_ae, y)
+        reg_loss = self.reg_loss(reg_out, y)
         loss = reg_loss + sup_loss + (self.recon_loss_factor * recon_loss)
-        """
-        self.log('sup_loss', sup_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('recon_loss', recon_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log('loss', loss, on_step=False, on_epoch=True, prog_bar=True)
-        """
-        return {'val_loss': loss, 'val_sup_loss': sup_loss, 'val_reg_loss': reg_loss}
+        return {'val_loss': loss, 'val_sup_loss': sup_loss, 'val_reg_loss': reg_loss, 'val_recon_loss': recon_loss}
 
     def validation_epoch_end(self, outputs) -> None:
         epoch_loss = torch.tensor([x['val_loss'] for x in outputs]).mean()
@@ -135,9 +134,12 @@ class SupAE(pl.LightningModule):
             [x['val_sup_loss'] for x in outputs]).mean()
         epoch_reg_loss = torch.tensor(
             [x['val_reg_loss'] for x in outputs]).mean()
-        self.log('val_loss', epoch_loss, prog_bar=True)
+        epoch_recon_loss = torch.tensor(
+            [x['val_recon_loss'] for x in outputs]).mean()
         self.log('val_reg_loss', epoch_reg_loss, prog_bar=True)
         self.log('val_sup_loss', epoch_sup_loss, prog_bar=True)
+        self.log('val_recon_loss', epoch_recon_loss, prog_bar=True)
+        self.log('val_loss', epoch_loss, prog_bar=True)
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(

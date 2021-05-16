@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.preprocessing import StandardScaler, OrdinalEncoder
-from torch.utils.data import Dataset, Subset, BatchSampler, SequentialSampler, DataLoader
+from torch.utils.data import Dataset, Subset, BatchSampler, SequentialSampler, DataLoader, Sampler
 import time
 from joblib import Parallel, delayed
 import gc
@@ -47,7 +47,7 @@ class FinData(Dataset):
                 sample = {
                     'target': torch.Tensor(self.target[index]),
                     'data':   torch.Tensor(self.data[index]),
-                    'era':    torch.Tensor(self.era[index]),
+                    'era':    torch.Tensor(self.era[index].values),
                 }
             if self.hidden is not None:
                 sample['hidden'] = torch.Tensor(self.hidden[index])
@@ -66,6 +66,7 @@ def get_data_path(root_dir):
 
 
 def load_data(root_dir, mode, overide=None):
+    print(f'loading {mode} data')
     data_path = get_data_path(root_dir=root_dir)
     if overide:
         data = dt.fread(overide).to_pandas()
@@ -188,10 +189,19 @@ def calc_data_mean(array, cache_dir=None, fold=None, train=True, mode='mean'):
     return array
 
 
-def weighted_mean(scores, sizes):
-    largest = np.max(sizes)
+def weighted_mean(scores, sizes=0):
+    """largest = np.max(sizes)
     weights = [size / largest for size in sizes]
-    return np.average(scores, weights=weights)
+    return np.average(scores, weights=weights)"""
+    w = []
+    n = len(scores)
+    for j in range(1, n + 1):
+        j = 2 if j == 1 else j
+        w.append(1 / (2 ** (n + 1 - j)))
+    # return np.average([score.reshape(-1) for score in scores], weights=w)
+    for i in range(len(scores)):
+        scores[i] = scores[i] * w[i]
+    return np.mean([np.sum(scores, axis=0)], 0)
 
 
 def create_dataloaders(dataset: Dataset, indexes: dict, batch_size):
@@ -199,28 +209,33 @@ def create_dataloaders(dataset: Dataset, indexes: dict, batch_size):
     val_idx = indexes.get('val', None)
     test_idx = indexes.get('test', None)
     dataloaders = {}
+    if type(train_idx) != list:
+        train_idx = train_idx.tolist()
+    if type(val_idx) != list:
+        val_idx = val_idx.tolist()
+    if type(test_idx) != list and test_idx is not None:
+        test_idx = test_idx.tolist()
     if train_idx:
-        train_set = Subset(dataset, train_idx)
-        train_sampler = BatchSampler(
-            train_set.indices, batch_size=batch_size, drop_last=False)
+        # train_set = Subset(dataset, train_idx)
+        train_sampler = EraSampler(
+            data_source=dataset, indices=train_idx, shuffle=False)
         dataloaders['train'] = DataLoader(
             dataset, sampler=train_sampler, num_workers=10, pin_memory=True, shuffle=False)
     if val_idx:
-        val_set = Subset(dataset, val_idx)
-        val_sampler = BatchSampler(
-            val_set.indices, batch_size=batch_size, drop_last=False)
+        # val_set = Subset(dataset, val_idx)
+        val_sampler = EraSampler(
+            data_source=dataset, indices=val_idx, shuffle=False)
         dataloaders['val'] = DataLoader(
             dataset, sampler=val_sampler, num_workers=10, pin_memory=True, shuffle=False)
     if test_idx:
-        test_set = Subset(dataset, test_idx)
-        test_sampler = BatchSampler(
-            test_set.indices, batch_size=batch_size, drop_last=False)
+        # test_set = Subset(dataset, test_idx)
+        test_sampler = EraSampler(data_source=dataset[test_idx], shuffle=False)
         dataloaders['test'] = DataLoader(
             dataset, sampler=test_sampler, num_workers=10, pin_memory=True, shuffle=False)
     return dataloaders
 
 
-def seed_everything(seed):
+def seed_everything(seed=0):
     random.seed(seed)
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -268,53 +283,39 @@ def create_predictions(root_dir: str = './data', models: dict = {}, hidden=True,
         t_idx = np.arange(start=0, stop=len(era), step=1).tolist()
         data_dict = data_dict = {'data':     data, 'target': target,
                                  'features': features, 'era': era}
-        if models.get('ae', None):
-            p_ae = models['ae'][1]
-            p_ae['input_size'] = len(features)
-            p_ae['output_size'] = 1
-            model = models['ae'][0]
-            model.eval()
-        if ae:
-            hidden_pred = create_hidden_rep(
-                model=model, data_dict=data_dict)
-            data_dict['hidden_true'] = True
-            df['prediction_ae'] = hidden_pred['preds']
-        if models.get('ResNet', None):
-            p_res = models['ResNet'][1]
-            p_res['input_size'] = len(features)
-            p_res['output_size'] = 1
-            p_res['hidden_len'] = data_dict['hidden'].shape[-1]
-            dataset = FinData(
-                data=data_dict['data'], target=data_dict['target'], era=data_dict['era'],
-                hidden=data_dict.get('hidden', None))
-            dataloaders = create_dataloaders(
-                dataset, indexes={'train': t_idx}, batch_size=p_res['batch_size'])
-            model = models['ResNet'][0]
-            model.eval()
-            predictions = []
-            for batch in dataloaders['train']:
-                pred = model(batch['data'].view(
-                    batch['data'].shape[1], -1), hidden=batch['hidden'].view(batch['hidden'].shape[1], -1))
-                predictions.append(pred.cpu().detach().numpy().tolist())
-            predictions = np.array([predictions[i][j] for i in range(
-                len(predictions)) for j in range(len(predictions[i]))])
-            df['prediction_resnet'] = predictions
-        if models.get('xgb', None):
-            model_xgboost_1 = models['xgb'][0]
-            model_xgboost_2 = models['xgb'][1]
-            x_val = data_dict['data']
-            preds_1 = model_xgboost_1.predict(xgb.DMatrix(x_val))
-            preds_2 = model_xgboost_2.predict(xgb.DMatrix(x_val))
-            df['prediction_xgb'] = np.mean([0.55*preds_1 + 0.45 * preds_2], 0)
-        if models.get('lgb', None):
-            model_lgb = models['lgb'][0]
-            model_lgb_2 = models['lgb'][1]
-            x_val = data_dict['data']
-            pred_1 = model_lgb.predict(x_val)
-            preds_2 = model_lgb_2.predict(x_val)
-            df['prediction_lgb'] = np.mean([0.55*preds_1 + 0.45 * preds_2], 0)
-        df['prediction'] = df['prediction_xgb']
+        preds = {k: [] for k in models.keys()}
+        for key, val in models.items():
+            for i, model in enumerate(val):
+                if key == 'xgb':
+                    d = xgb.DMatrix(data)
+                    preds[key].append(model.predict(d).squeeze())
+                    del d
+                elif key == 'lgb':
+                    preds[key].append(model.predict(data).squeeze())
+                elif key == 'ae':
+                    model.eval()
+                    d = torch.Tensor(data)
+                    _, _, preds_ae, _, _ = model(d)
+                    preds[key].append(preds_ae.detach().numpy().squeeze())
+                if key == 'resnet':
+                    model.eval()
+                    d = torch.Tensor(data)
+                    pred = model(d)
+                    preds[key].append(pred.detach().numpy().squeeze())
+                if key == 'cat':
+                    preds[key].append(model.predict(data).squeeze())
+        for key in preds:
+            temp = []
+            temp.append(weighted_mean(preds[key][:10]))
+            temp.append(weighted_mean(preds[key][10:20]))
+            temp.append(weighted_mean(preds[key][20:30]))
+            preds[key] = np.mean([temp], axis=0)
+        preds_stacked = np.vstack([pred for pred in preds.values()])
+
+        df['prediction'] = np.mean(preds_stacked, 0)
         df = df[['id', 'prediction']]
+        if not os.path.isdir(f'{get_data_path(root_dir)}/predictions/'):
+            os.makedirs(f'{get_data_path(root_dir)}/predictions')
         pred_path = f'{get_data_path(root_dir)}/predictions/{era[0]}'
         df.to_csv(f'{pred_path}.csv')
 
@@ -498,3 +499,44 @@ class Reducer:
         print(f"WARNING: {colname} doesn't fit the grid with \nmax: {s.max()} "
               f"and \nmin: {s.min()}")
         print('Dropping it..')
+
+
+class EraSampler(Sampler):
+    r"""Takes a dataset with era indices property, cuts it into batch-sized chunks
+    Drops the extra items, not fitting into exact batches
+    Arguments:
+        data_source (Dataset): a Dataset to sample from. Should have a era property
+        batch_size (int): a batch size that you would like to use later with Dataloader class
+        shuffle (bool): whether to shuffle the data or not
+    """
+
+    def __init__(self, data_source, indices, batch_size=None, shuffle=True):
+        super(EraSampler, self).__init__(data_source)
+        self.data_source = data_source
+        self.era = self.data_source.era[indices]
+        """
+        if batch_size is not None:
+            assert self.data_source.batch_sizes is None, "do not declare batch size in sampler " \
+                                                         "if data source already got one"
+            self.batch_sizes = [len(np.where(self.data_source.era == i)) for i in np.unique(self.data_source.era)]
+        else:
+            self.batch_sizes = self.data_source.batch_sizes
+        """
+
+        self.shuffle = shuffle
+
+    def flatten_list(self, lst):
+        return [item for sublist in lst for item in sublist]
+
+    def __iter__(self):
+        batch_lists = [self.era.index[np.where(
+            self.era == i)] for i in np.unique(self.era)]
+        # flatten lists and shuffle the batches if necessary
+        # this works on batch level
+        # batch_lists = self.flatten_list(batch_lists)
+        if self.shuffle:
+            random.shuffle(batch_lists)
+        return iter(batch_lists)
+
+    def __len__(self):
+        return len(np.unique(self.era))
