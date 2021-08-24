@@ -20,3 +20,8 @@ events.*
 /data
 *.txt
 *.ipynb
+*.dump
+*.tsv
+/saved_models
+/Signals
+/*logs
