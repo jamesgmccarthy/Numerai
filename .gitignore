@@ -25,3 +25,6 @@ events.*
 /saved_models
 /Signals
 /*logs
+models/modelling.py
+models/lightning_nn.py
+models/nn_modelling.py
