@@ -354,7 +354,7 @@ def create_prediction_file(root_dir='./data', eras=None):
     df = df_test.merge(df, on='id')
     df = df[['id', 'prediction']]
     df.to_csv(f'{pred_path}predictions.csv', index=False)
-    return df
+    return pred_path
 
 
 def read_api_token(path: str = 'neptune_api_token.txt'):
