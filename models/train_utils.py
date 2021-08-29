@@ -1,30 +1,22 @@
-import os.path
 import datetime
-from data_loading.purged_group_time_series import PurgedGroupTimeSeriesSplit
-from logging import root
-from metrics.corr_loss_function import CorrLoss
-import joblib
-import numpy as np
-from lightgbm.basic import LGBMDeprecationWarning
-from numpy.lib.function_base import rot90
-from scipy.sparse.construct import random
-from torch.utils.data.dataset import random_split
-import data_loading.utils as utils
-from models.SupervisedAutoEncoder import SupAE
-from hpo.ae_hpo import create_param_dict
-from models.resnet import ResNet
-import xgboost as xgb
-import lightgbm as lgb
-import catboost as cat
+import os.path
 import pickle
-from sklearn.model_selection import GroupShuffleSplit, GroupKFold
-from sklearn.metrics import mean_squared_error
+
+import catboost as cat
+import joblib
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+import pytorch_lightning as pl
 import torch
 import torch.nn as nn
-import pytorch_lightning as pl
-from models.resnet import ResNet, init_weights
+import xgboost as xgb
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-import pandas as pd
+from sklearn.metrics import mean_squared_error
+
+import data_loading.utils as utils
+from data_loading.purged_group_time_series import PurgedGroupTimeSeriesSplit
+from models.resnet import ResNet, init_weights
 
 
 class Trainer():
@@ -221,9 +213,10 @@ def main():
                   'lgb': './hpo/params/lgb_hpo_ae_False_2021-05-16.pkl',
                   'cat': {'learning_rate': 0.013520865420108316, 'min_data_in_leaf':
                                            599, 'l2_leaf_reg': 0.04498050323217781, 'bagging_temperature':
-                                           0.17428787707251533, 'depth': 10}}
+                                           0.17428787707251533, 'depth': 10}
+                  }
     trainer = Trainer(data_dict=data_dict, model_dict=model_dict)
-    # trainer.cross_val_train(splits=10, state=random_seed)
-    # trainer.cross_val_train(splits=10, state=random_seed + 1)
-    # trainer.cross_val_train(splits=10, state=random_seed + 2)
+    trainer.cross_val_train(splits=10, state=random_seed)
+    trainer.cross_val_train(splits=10, state=random_seed + 1)
+    trainer.cross_val_train(splits=10, state=random_seed + 2)
     trainer.full_train()

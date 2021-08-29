@@ -1,20 +1,14 @@
-import torch
-import copy
-import os
 import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
+import torch
 import torch.nn as nn
-from sklearn.metrics import mean_squared_error
-from tqdm import tqdm
-from pytorch_lightning import loggers as pl_loggers
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-
-from data_loading.purged_group_time_series import PurgedGroupTimeSeriesSplit
-from data_loading.utils import load_data, preprocess_data, FinData, create_dataloaders, calc_data_mean, init_weights
-from metrics.corr_loss_function import CorrLoss, SpearmanLoss
-from torchinfo import summary
+from sklearn.metrics import mean_squared_error
 from sklearn.model_selection import GroupKFold
+
+from data_loading.utils import load_data, preprocess_data, FinData, create_dataloaders, init_weights
+from metrics.corr_loss_function import CorrLoss
 
 
 class ResNet(pl.LightningModule):
@@ -272,5 +266,6 @@ def main():
     print("Max Drawdown", max_drawdown)
     print('mean_squared_error', mean_squared_error_)
 
-    if __name__ == '__main__':
-        main()
+
+if __name__ == '__main__':
+    main()

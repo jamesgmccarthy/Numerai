@@ -1,23 +1,20 @@
-from hpo import gbm_hpo, nn_hpo, ae_hpo
-from dotenv import load_dotenv
 import os
-import numerapi
-from data_loading import utils
-from models import train_utils
 import pickle
+
 import catboost as cat
 import lightgbm as lgb
-import xgboost as xgb
-import models.feature_engineering_nn as fenn
-from models import resnet as res
-from models import train_utils
+import numerapi
 import torch.nn as nn
+from dotenv import load_dotenv
+
+from data_loading import utils
 from metrics.corr_loss_function import CorrLoss
+from models import resnet as res
 
 
-def credentials():
+def credentials(override=False):
     dotenv_path = 'num_config.env'
-    load_dotenv(dotenv_path=dotenv_path)
+    load_dotenv(dotenv_path=dotenv_path, override=override)
     pub_id = os.getenv('PUBLIC_ID')
     priv_key = os.getenv('PRIVATE_KEY')
     latest_round = os.getenv('LATEST_ROUND')
@@ -88,6 +85,7 @@ def main():
         verbosity='INFO', public_id=keys['PUBLIC_ID'], secret_key=keys['PRIVATE_KEY'])
     keys['LATEST_ROUND'] = download_data(numapi, keys)
     update_env_file(keys)
+    keys = credentials(override=True)
     utils.seed_everything(0)
 
     # gbm_hpo.main()
@@ -102,6 +100,7 @@ def main():
     # res.main()
     # train_utils.main()
     create_preds()
+    # res.main()
 
 
 if __name__ == '__main__':
