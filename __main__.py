@@ -46,7 +46,8 @@ def create_preds():
         'cat_cross_val': './saved_models/cat/cross_val/2021-05-16/'}
     models_loaded = load_models(paths)
     utils.create_predictions(models=models_loaded)
-    utils.create_prediction_file()
+    pred_path = utils.create_prediction_file()
+    return pred_path
 
 
 def load_models(paths):
@@ -99,7 +100,13 @@ def main():
     # fenn.main()
     # res.main()
     # train_utils.main()
-    create_preds()
+    pred_path = create_preds()
+    # CORR
+    numapi.upload_predictions(file_path=pred_path+'predictions.csv',
+                              model_id="2cff64e1-2e63-416e-b06e-609f27bb57fd")
+    # Corr + 2x MMC
+    numapi.upload_predictions(file_path=pred_path+'predictions.csv',
+                              model_id="2cff64e1-2e63-416e-b06e-609f27bb57fd")
     # res.main()
 
 
