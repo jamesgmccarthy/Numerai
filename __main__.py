@@ -102,11 +102,11 @@ def main():
     # train_utils.main()
     pred_path = create_preds()
     # CORR
-    numapi.upload_predictions(file_path=pred_path+'predictions.csv',
-                              model_id="2cff64e1-2e63-416e-b06e-609f27bb57fd")
+    numapi.upload_predictions(file_path=pred_path + 'predictions.csv',
+                              model_id=keys['MODEL_2'])
     # Corr + 2x MMC
-    numapi.upload_predictions(file_path=pred_path+'predictions.csv',
-                              model_id="2cff64e1-2e63-416e-b06e-609f27bb57fd")
+    numapi.upload_predictions(file_path=pred_path + 'predictions.csv',
+                              model_id=keys['MODEL_2'])
     # res.main()
 
 
