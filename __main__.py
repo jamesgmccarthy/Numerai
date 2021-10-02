@@ -18,7 +18,10 @@ def credentials(override=False):
     pub_id = os.getenv('PUBLIC_ID')
     priv_key = os.getenv('PRIVATE_KEY')
     latest_round = os.getenv('LATEST_ROUND')
-    return {'PUBLIC_ID': pub_id, 'PRIVATE_KEY': priv_key, 'LATEST_ROUND': latest_round}
+    model_1 = os.getenv('MODEL_1')
+    model_2 = os.getenv('MODEL_2')
+    return {'PUBLIC_ID': pub_id, 'PRIVATE_KEY': priv_key, 'LATEST_ROUND': latest_round, 'MODEL_1': model_1,
+            'MODEL_2':   model_2}
 
 
 def download_data(api: numerapi.NumerAPI, keys):
@@ -35,6 +38,8 @@ def update_env_file(env_vars):
         f.write(f'LATEST_ROUND={env_vars["LATEST_ROUND"]}\n')
         f.write(f'PUBLIC_ID={env_vars["PUBLIC_ID"]}\n')
         f.write(f'PRIVATE_KEY={env_vars["PRIVATE_KEY"]}\n')
+        f.write(f'MODEL_1={env_vars["MODEL_1"]}\n')
+        f.write(f'MODEL_2={env_vars["MODEL_2"]}\n')
 
 
 def create_preds():
@@ -103,7 +108,7 @@ def main():
     pred_path = create_preds()
     # CORR
     numapi.upload_predictions(file_path=pred_path + 'predictions.csv',
-                              model_id=keys['MODEL_2'])
+                              model_id=keys['MODEL_1'])
     # Corr + 2x MMC
     numapi.upload_predictions(file_path=pred_path + 'predictions.csv',
                               model_id=keys['MODEL_2'])
