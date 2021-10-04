@@ -4,12 +4,14 @@ import pickle
 import catboost as cat
 import lightgbm as lgb
 import numerapi
+import pandas as pd
 import torch.nn as nn
 from dotenv import load_dotenv
 
 from data_loading import utils
 from metrics.corr_loss_function import CorrLoss
 from models import resnet as res
+from hpo import gbm_hpo
 
 
 def credentials(override=False):
@@ -25,12 +27,14 @@ def credentials(override=False):
 
 
 def download_data(api: numerapi.NumerAPI, keys):
-    if int(keys['LATEST_ROUND']) == api.get_current_round():
+    current_round = api.get_current_round()
+    if int(keys['LATEST_ROUND']) == current_round and os.path.isfile(f'./data/round_{current_round}/live_data.csv'):
         return int(keys['LATEST_ROUND'])
     else:
-        LATEST_ROUND = api.get_current_round()
-        api.download_current_dataset('./data')
-        return LATEST_ROUND
+        if not os.path.exists(f'./data/round_{current_round}'):
+            os.mkdir(f'./data/round_{current_round}')
+        api.download_dataset('numerai_live_data.csv', dest_path=f'./data/round_{current_round}/live.csv')
+        return current_round
 
 
 def update_env_file(env_vars):
@@ -94,7 +98,7 @@ def main():
     keys = credentials(override=True)
     utils.seed_everything(0)
 
-    # gbm_hpo.main()
+    gbm_hpo.main()
     # ae_hpo.main(embedding=False)
     # gbm_hpo.main(ae_train=True)
     # nn_hpo.main(train_ae=False)
@@ -105,13 +109,13 @@ def main():
     # fenn.main()
     # res.main()
     # train_utils.main()
-    pred_path = create_preds()
+    # pred_path = create_preds()
     # CORR
-    numapi.upload_predictions(file_path=pred_path + 'predictions.csv',
-                              model_id=keys['MODEL_1'])
+    # numapi.upload_predictions(file_path=pred_path + 'predictions.csv',
+    #                          model_id=keys['MODEL_1'])
     # Corr + 2x MMC
-    numapi.upload_predictions(file_path=pred_path + 'predictions.csv',
-                              model_id=keys['MODEL_2'])
+    # numapi.upload_predictions(file_path=pred_path + 'predictions.csv',
+    #                          model_id=keys['MODEL_2'])
     # res.main()
 
 

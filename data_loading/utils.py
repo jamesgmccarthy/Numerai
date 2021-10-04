@@ -57,24 +57,37 @@ class FinData(Dataset):
         return len(self.data)
 
 
-def get_data_path(root_dir):
-    dotenv_path = 'num_config.env'
-    load_dotenv(dotenv_path=dotenv_path)
-    curr_round = os.getenv('LATEST_ROUND')
-    data_path = root_dir + '/numerai_dataset_' + str(curr_round)
+def get_data_path(root_dir, train=False):
+    if train:
+        dotenv_path = 'num_config.env'
+        load_dotenv(dotenv_path=dotenv_path)
+        curr_round = os.getenv('LATEST_ROUND')
+        data_path = root_dir + '/numerai_dataset_' + str(curr_round)
+    else:
+        data_path = root_dir + '/numerai_dataset'
     return data_path
 
 
-def load_data(root_dir, mode, overide=None):
+def load_data(root_dir, mode, overide=None, old=False):
     print(f'loading {mode} data')
     data_path = get_data_path(root_dir=root_dir)
-    if overide:
-        data = dt.fread(overide).to_pandas()
-    elif mode == 'train':
-        data = dt.fread(data_path + '/numerai_training_data.csv').to_pandas()
-    elif mode == 'test':
-        data = dt.fread(data_path + '/numerai_tournament_data.csv').to_pandas()
-    return data
+    # for legacy purposes
+    if old:
+        if overide:
+            data = dt.fread(overide).to_pandas()
+        elif mode == 'train':
+            data = dt.fread(data_path + '/numerai_training_data.csv').to_pandas()
+        elif mode == 'test':
+            data = dt.fread(data_path + '/numerai_tournament_data.csv').to_pandas()
+        return data
+    else:
+        if overide:
+            data = pd.read_parquet(overide)
+        elif mode == 'train':
+            data = pd.read_parquet(data_path + '/numerai_training_data.parquet')
+        elif mode == 'test':
+            data = pd.read_parquet(data_path + '/numerai_tournament_data.parquet')
+        return data
 
 
 def reduce_mem(df):
@@ -540,3 +553,20 @@ class EraSampler(Sampler):
 
     def __len__(self):
         return len(np.unique(self.era))
+
+
+def data_sampler(tr_idx, val_idx, type='train'):
+    data = load_data('./data', mode=type)
+
+    data = data.iloc[:val_idx[-1] + 1]
+    data, target, features, era = preprocess_data(data, nn=True)
+    data_dict = {'data':     data, 'target': target,
+                 'features': features, 'era': era}
+    x_tr, x_val = data_dict['data'][tr_idx], data_dict['data'][val_idx]
+    y_tr, y_val = data_dict['target'][tr_idx], data_dict['target'][val_idx]
+    return x_tr, y_tr, x_val, y_val
+
+
+def get_eras(type='train'):
+    data = load_data('./data', mode=type)
+    return data[['era', 'target']]
