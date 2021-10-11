@@ -20,7 +20,7 @@ from models.resnet import ResNet, init_weights
 
 
 class Trainer():
-    def __init__(self, data_dict, model_dict):
+    def __init__(self, data_dict, model_dict, downsample):
         self.data_dict = data_dict
         self.features = data_dict['features']
         self.save_loc = './saved_models/trained/cross_val/'
@@ -28,6 +28,7 @@ class Trainer():
         self.get_hyp_params()
         self.add_const_params()
         self.scores = {}
+        self.downsample = downsample
 
     def get_hyp_params(self):
         for model, path in self.model_dict.items():
@@ -55,12 +56,11 @@ class Trainer():
                                            'n_jobs':      10,
                                            'eval_metric': 'rmse'})
 
-    def cross_val_train(self, splits=10, state=0):
-
-        gts = PurgedGroupTimeSeriesSplit(n_splits=splits, group_gap=2)
+    def cross_val_train(self, splits=5, state=0, downsampling=1, count=0):
+        gts = PurgedGroupTimeSeriesSplit(n_splits=splits, group_gap=5)
         for i, (tr_idx, val_idx) in enumerate(gts.split(self.data_dict['data'], groups=self.data_dict['era'])):
-            x_tr, x_val = self.data_dict['data'][tr_idx], self.data_dict['data'][val_idx]
-            y_tr, y_val = self.data_dict['target'][tr_idx], self.data_dict['target'][val_idx]
+            x_tr, y_tr, x_val, y_val = utils.data_sampler(tr_idx, val_idx, type='train', downsampling=downsampling,
+                                                          count=count)
             if 'xgb' in self.model_dict:
                 dir = f'./saved_models/xgb/cross_val/{datetime.date.today()}'
                 if not os.path.isdir(dir):
@@ -194,29 +194,31 @@ class Trainer():
             self.train_resnet(data_loaders=data_loaders, path=path_resnet)
 
 
-def main():
+def main(add_val=False, downsample=4):
     data = utils.load_data(root_dir='./data', mode='train')
     data, target, features, era = utils.preprocess_data(data, nn=True)
     random_seed = 0
     data_dict = {'data':     data, 'target': target,
                  'features': features, 'era': era}
-    data = utils.load_data(root_dir='./data', mode='test')
-    data = data[data['data_type'] == 'validation']
-    data, target, features, era = utils.preprocess_data(data, nn=True)
-    data_dict['data'] = np.concatenate(
-        [data_dict['data'], data], 0)
-    data_dict['target'] = np.concatenate(
-        [data_dict['target'], target], 0)
-    data_dict['era'] = pd.Series(
-        np.concatenate([data_dict['era'], era], 0))
+    if add_val:
+        data = utils.load_data(root_dir='./data', mode='test')
+        data = data[data['data_type'] == 'validation']
+        data, target, features, era = utils.preprocess_data(data, nn=True)
+        data_dict['data'] = np.concatenate(
+            [data_dict['data'], data], 0)
+        data_dict['target'] = np.concatenate(
+            [data_dict['target'], target], 0)
+        data_dict['era'] = pd.Series(
+            np.concatenate([data_dict['era'], era], 0))
     model_dict = {'xgb': './hpo/params/xgb_hpo_2021-05-15.pkl',
                   'lgb': './hpo/params/lgb_hpo_ae_False_2021-05-16.pkl',
                   'cat': {'learning_rate': 0.013520865420108316, 'min_data_in_leaf':
                                            599, 'l2_leaf_reg': 0.04498050323217781, 'bagging_temperature':
                                            0.17428787707251533, 'depth': 10}
                   }
-    trainer = Trainer(data_dict=data_dict, model_dict=model_dict)
-    trainer.cross_val_train(splits=10, state=random_seed)
-    trainer.cross_val_train(splits=10, state=random_seed + 1)
-    trainer.cross_val_train(splits=10, state=random_seed + 2)
+    trainer = Trainer(data_dict=data_dict, model_dict=model_dict, downsample=downsample)
+    for count in range(downsample):
+        trainer.cross_val_train(splits=5, count=count)
+        trainer.cross_val_train(splits=5, count=count)
+        trainer.cross_val_train(splits=5, count=count)
     trainer.full_train()

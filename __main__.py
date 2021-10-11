@@ -11,7 +11,8 @@ from dotenv import load_dotenv
 from data_loading import utils
 from metrics.corr_loss_function import CorrLoss
 from models import resnet as res
-from hpo import gbm_hpo
+from hpo import gbm_hpo, ae_hpo
+from models import SupervisedAutoEncoder, train_utils
 
 
 def credentials(override=False):
@@ -102,7 +103,7 @@ def main():
     # ae_hpo.main(embedding=False)
     # gbm_hpo.main(ae_train=True)
     # nn_hpo.main(train_ae=False)
-    # train_utils.main()
+    train_utils.main()
     # models = load_models('./saved_models/trained/cross_val/')
     # utils.create_predictions(models=models)
     # utils.create_prediction_file()

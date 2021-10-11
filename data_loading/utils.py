@@ -153,6 +153,7 @@ def preprocess_data(data: pd.DataFrame, scale: bool = False, nn: bool = False, t
     Returns
     -------
     """
+    # data = reduce_mem(data)
     features = [col for col in data.columns if 'feature' in col]
     era = data['era']
     era = era.transform(lambda x: re.sub('[a-z]', '', x))
@@ -555,11 +556,13 @@ class EraSampler(Sampler):
         return len(np.unique(self.era))
 
 
-def data_sampler(tr_idx, val_idx, type='train'):
+def data_sampler(tr_idx, val_idx, type='train', downsampling=1, count=0):
+    tr_idx, val_idx = np.array(tr_idx), np.array(val_idx)
+    tr_idx, val_idx = tr_idx[count::downsampling], val_idx[count::downsampling]
     data = load_data('./data', mode=type)
-
-    data = data.iloc[:val_idx[-1] + 1]
+    data = data.iloc[tr_idx[0]:val_idx[-1] + 1]
     data, target, features, era = preprocess_data(data, nn=True)
+
     data_dict = {'data':     data, 'target': target,
                  'features': features, 'era': era}
     x_tr, x_val = data_dict['data'][tr_idx], data_dict['data'][val_idx]
