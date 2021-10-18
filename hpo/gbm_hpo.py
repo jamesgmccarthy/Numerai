@@ -20,7 +20,7 @@ import catboost as cat
 from sklearn.model_selection import GroupKFold
 
 
-def optimize(trial: optuna.trial.Trial, downsample=None, count=1):
+def optimize(trial: optuna.trial.Trial, downsample=None, count=0):
     p = {'learning_rate':    trial.suggest_uniform('learning_rate', 1e-4, 1e-1),
          'max_depth':        trial.suggest_int('max_depth', 5, 30),
          'max_leaves':       trial.suggest_int('max_leaves', 5, 50),
@@ -41,10 +41,11 @@ def optimize(trial: optuna.trial.Trial, downsample=None, count=1):
     # gts =GroupKFold(n_splits=10)
 
     gts = pgs.PurgedGroupTimeSeriesSplit(n_splits=5, group_gap=5)
-    data = utils.get_eras()
-    for i, (tr_idx, val_idx) in enumerate(gts.split(data['target'], groups=data['era'])):
+    data_dict = utils.create_data_dict(mode='train', nn=True)
+    for i, (tr_idx, val_idx) in enumerate(gts.split(data_dict['target'], groups=data_dict['era'])):
         print(f'Training on split {i + 1}')
-        x_tr, y_tr, x_val, y_val = utils.data_sampler(tr_idx, val_idx, downsampling=downsample, count=count)
+        x_tr, y_tr, x_val, y_val = utils.data_sampler(tr_idx, val_idx, data_dict=data_dict, downsampling=downsample,
+                                                      count=count)
         d_tr = xgb.DMatrix(x_tr, label=y_tr)
         del x_tr
         d_val = xgb.DMatrix(x_val, label=y_val)
@@ -66,7 +67,7 @@ def optimize(trial: optuna.trial.Trial, downsample=None, count=1):
     return avg_score
 
 
-def loptimize(trial, downsample=1, count=1):
+def loptimize(trial, downsample=1, count=0):
     p = {'learning_rate':    trial.suggest_uniform('learning_rate', 1e-5, 1e-1),
          'max_leaves':       trial.suggest_int('max_leaves', 5, 100),
          'bagging_fraction': trial.suggest_uniform('bagging_fraction', 0.3, 0.99),
@@ -80,7 +81,8 @@ def loptimize(trial, downsample=1, count=1):
          'verbose':          1,
          'n_jobs':           10,
          'metric':           'mse',
-         'seed':             0}
+         'seed':             0,
+         'device_type':      'gpu'}
     if p['boosting'] == 'goss':
         p['bagging_freq'] = 0
         p['bagging_fraction'] = 1.0
@@ -89,10 +91,11 @@ def loptimize(trial, downsample=1, count=1):
     # gts = GroupKFold(n_splits=10)
 
     gts = pgs.PurgedGroupTimeSeriesSplit(n_splits=5, group_gap=3)
-    data = utils.get_eras()
-    for i, (tr_idx, val_idx) in enumerate(gts.split(data['target'], groups=data['era'])):
+    data_dict = utils.create_data_dict(mode='train', nn=True)
+    for i, (tr_idx, val_idx) in enumerate(gts.split(data_dict['target'], groups=data_dict['era'])):
         print(f'Training on split {i}')
-        x_tr, y_tr, x_val, y_val = utils.data_sampler(tr_idx, val_idx, downsampling=downsample, count=count)
+        x_tr, y_tr, x_val, y_val = utils.data_sampler(tr_idx, val_idx, data_dict=data_dict, downsampling=downsample,
+                                                      count=count)
         train = lgb.Dataset(x_tr, label=y_tr)
         del x_tr
         gc.collect()
@@ -114,7 +117,7 @@ def loptimize(trial, downsample=1, count=1):
     return avg_score
 
 
-def catboost_optimize(trial, downsample=1, count=1):
+def catboost_optimize(trial, downsample=1, count=0):
     p = {'learning_rate':       trial.suggest_uniform('learning_rate', 1e-5, 1e-1),
          # 'max_leaves':       trial.suggest_int('max_leaves', 5, 50),
          'min_data_in_leaf':    trial.suggest_int('min_data_in_leaf', 50, 1000),
@@ -133,10 +136,11 @@ def catboost_optimize(trial, downsample=1, count=1):
     # gts = GroupKFold(n_splits=10)
 
     gts = pgs.PurgedGroupTimeSeriesSplit(n_splits=5, group_gap=3)
-    data = utils.get_eras()
-    for i, (tr_idx, val_idx) in enumerate(gts.split(data['target'], groups=data['era'])):
+    data_dict = utils.create_data_dict(mode='train', nn=True)
+    for i, (tr_idx, val_idx) in enumerate(gts.split(data_dict['target'], groups=data_dict['era'])):
         print(f'Training on split {i}')
-        x_tr, y_tr, x_val, y_val = utils.data_sampler(tr_idx, val_idx, downsampling=downsample, count=count)
+        x_tr, y_tr, x_val, y_val = utils.data_sampler(tr_idx, val_idx, data_dict=data_dict, downsampling=downsample,
+                                                      count=count)
         model = cat.CatBoostRegressor(iterations=1000, task_type='GPU', **p)
         model.fit(X=x_tr, y=y_tr, eval_set=(x_val, y_val),
                   early_stopping_rounds=50, verbose_eval=10)
@@ -152,7 +156,7 @@ def catboost_optimize(trial, downsample=1, count=1):
     return avg_score
 
 
-def main(ae_train=False, old=False):
+def main(ae_train=False, loop_downsample=False, old=False):
     if ae_train:
         data = data = utils.load_data('data/', mode='train')
         data, target, features, era = utils.preprocess_data(data, ordinal=True)
@@ -198,32 +202,60 @@ def main(ae_train=False, old=False):
                  project_qualified_name='jamesmccarthy65/Numerai')
     downsample = 4
     print('creating XGBoost Trials')
-    for i in range(downsample):
-        xgb_exp = neptune.create_experiment(f'XGBoost_HPO_downsample_{downsample}_{i}')
+    if loop_downsample:
+        for i in range(downsample):
+            xgb_exp = neptune.create_experiment(f'XGBoost_HPO_downsample_{downsample}_{i}')
+            xgb_neptune_callback = opt_utils.NeptuneCallback(experiment=xgb_exp)
+            study = optuna.create_study(direction='minimize')
+            study.optimize(lambda trial: optimize(trial, downsample=downsample, count=i),
+                           n_trials=20, callbacks=[xgb_neptune_callback])
+            joblib.dump(
+                study, f'hpo/params/xgb_hpo_downsample_{i}_{str(datetime.datetime.now().date())}.pkl')
+
+            print('Creating LightGBM Trials')
+            lgb_exp = neptune.create_experiment(f'LGBM_HPO_downsample_{downsample}_{i}')
+            lgbm_neptune_callback = opt_utils.NeptuneCallback(experiment=lgb_exp)
+            study = optuna.create_study(direction='minimize')
+            study.optimize(lambda trial: loptimize(trial, downsample=downsample, count=i),
+                           n_trials=20, callbacks=[lgbm_neptune_callback])
+            joblib.dump(
+                study, f'hpo/params/lgb_hpo_downsample_{i}_{str(datetime.datetime.now().date())}.pkl')
+
+            print('Creating Catboost Trials')
+            cat_exp = neptune.create_experiment(f'CAT_HPO_downsample_{downsample}_{i}')
+            cat_callback = opt_utils.NeptuneCallback(experiment=cat_exp)
+            study = optuna.create_study(direction='minimize')
+            study.optimize(lambda trial: catboost_optimize(
+                trial, downsample=downsample, count=i), n_trials=20, callbacks=[cat_callback])
+            joblib.dump(
+                study, f'hpo/params/cat_hpo_downsample_{i}_{str(datetime.datetime.now().date())}.pkl')
+    else:
+        """
+        xgb_exp = neptune.create_experiment(f'XGBoost_HPO')
         xgb_neptune_callback = opt_utils.NeptuneCallback(experiment=xgb_exp)
         study = optuna.create_study(direction='minimize')
-        study.optimize(lambda trial: optimize(trial, downsample=downsample, count=i),
+        study.optimize(lambda trial: optimize(trial),
                        n_trials=20, callbacks=[xgb_neptune_callback])
         joblib.dump(
-            study, f'hpo/params/xgb_hpo_downsample_{i}_{str(datetime.datetime.now().date())}.pkl')
-
+            study, f'hpo/params/xgb_hpo_{str(datetime.datetime.now().date())}.pkl')
+        """
         print('Creating LightGBM Trials')
-        lgb_exp = neptune.create_experiment(f'LGBM_HPO_downsample_{downsample}_{i}')
+        lgb_exp = neptune.create_experiment(f'LGBM_HPO')
         lgbm_neptune_callback = opt_utils.NeptuneCallback(experiment=lgb_exp)
         study = optuna.create_study(direction='minimize')
-        study.optimize(lambda trial: loptimize(trial, downsample=downsample, count=i),
-                       n_trials=40, callbacks=[lgbm_neptune_callback])
+        study.optimize(lambda trial: loptimize(trial),
+                       n_trials=20, callbacks=[lgbm_neptune_callback])
         joblib.dump(
-            study, f'hpo/params/lgb_hpo_downsample_{i}_{str(datetime.datetime.now().date())}.pkl')
+            study, f'hpo/params/lgb_hpo_{str(datetime.datetime.now().date())}.pkl')
 
         print('Creating Catboost Trials')
-        cat_exp = neptune.create_experiment(f'CAT_HPO_downsample_{downsample}_{i}')
+        cat_exp = neptune.create_experiment(f'CAT_HPO')
         cat_callback = opt_utils.NeptuneCallback(experiment=cat_exp)
         study = optuna.create_study(direction='minimize')
         study.optimize(lambda trial: catboost_optimize(
-            trial, downsample=downsample, count=i), n_trials=40, callbacks=[cat_callback])
+            trial), n_trials=20, callbacks=[cat_callback])
         joblib.dump(
-            study, f'hpo/params/cat_hpo_downsample_{i}_{str(datetime.datetime.now().date())}.pkl')
+            study, f'hpo/params/cat_hpo_{str(datetime.datetime.now().date())}.pkl')
 
 
 if __name__ == '__main__':

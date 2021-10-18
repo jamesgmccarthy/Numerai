@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from data_loading import utils
 from metrics.corr_loss_function import CorrLoss
 from models import resnet as res
-from hpo import gbm_hpo, ae_hpo
+from hpo import gbm_hpo, ae_hpo, nn_hpo
 from models import SupervisedAutoEncoder, train_utils
 
 
@@ -47,17 +47,17 @@ def update_env_file(env_vars):
         f.write(f'MODEL_2={env_vars["MODEL_2"]}\n')
 
 
-def create_preds():
+def create_preds(val=False):
     paths = {  # 'xgb':           './saved_models/xgb/full_train/2021-05-16/',
-        'xgb_cross_val': './saved_models/xgb/cross_val/2021-05-16/',
-        # 'lgb':           './saved_models/lgb/full_train/2021-05-16/',
-        'lgb_cross_val': './saved_models/lgb/cross_val/2021-05-16/',
-        # 'cat':           './saved_models/cat/full_train/2021-05-16/',
-        'cat_cross_val': './saved_models/cat/cross_val/2021-05-16/'}
+        # 'xgb_cross_val': './saved_models/xgb/cross_val/2021-05-16/',
+        'lgb':           './saved_models/lgb/full_train/2021-10-12/',
+        'lgb_cross_val': './saved_models/lgb/cross_val/2021-10-11/',
+        'cat':           './saved_models/cat/full_train/2021-10-12/',
+        'cat_cross_val': './saved_models/cat/cross_val/2021-10-11/'}
     models_loaded = load_models(paths)
-    utils.create_predictions(models=models_loaded)
-    pred_path = utils.create_prediction_file()
-    return pred_path
+    utils.create_predictions(models=models_loaded, val=val)
+    # pred_path = utils.create_prediction_file()
+    # return pred_path
 
 
 def load_models(paths):
@@ -67,26 +67,19 @@ def load_models(paths):
              'batch_size': 12963, 'loss': nn.MSELoss, 'corr_loss': CorrLoss, 'embedding': False,
              'features':   [feat for feat in range(310)]}
 
-    models_loaded = {'xgb': [], 'lgb': [], 'cat': []}
+    models_loaded = {'lgb': {}, 'cat': {}}
     for model in paths.keys():
         for file in sorted(os.listdir(paths[model])):
             if model == 'xgb_cross_val' or model == 'xgb':
-                models_loaded['xgb'].append(
-                    pickle.load(open(f'{paths[model]}{file}', 'rb')))
+                models_loaded['xgb'][file] = pickle.load(open(f'{paths[model]}{file}', 'rb'))
             if model == 'lgb' or model == 'lgb_cross_val':
-                models_loaded['lgb'].append(
-                    lgb.Booster(model_file=f'{paths[model]}{file}'))
-            if model == 'ae':
-                models_loaded['ae'].append(utils.load_model(
-                    path=f'./saved_models/trained/{file}', p=p_ae, pl_lightning=False, model=SupAE))
+                models_loaded['lgb'][file] = lgb.Booster(model_file=f'{paths[model]}{file}')
             if model == 'cat' or model == 'cat_cross_val':
-                models_loaded['cat'].append(
-                    cat.CatBoostRegressor().load_model(f'{paths[model]}{file}'))
+                models_loaded['cat'][file] = cat.CatBoostRegressor().load_model(f'{paths[model]}{file}')
             if model == 'resnet' or model == 'resnet_cross_val':
                 print(f'{paths[model]}/{file}')
-                models_loaded['resnet'].append(utils.load_model(
-                    path=f'{paths[model]}/{file}', p=p_res, pl_lightning=False, model=res.ResNet))
-
+                models_loaded['resnet'][file] = utils.load_model(
+                    path=f'{paths[model]}/{file}', p=p_res, pl_lightning=False, model=res.ResNet)
     return models_loaded
 
 
@@ -99,18 +92,18 @@ def main():
     keys = credentials(override=True)
     utils.seed_everything(0)
 
-    gbm_hpo.main()
+    # gbm_hpo.main()
     # ae_hpo.main(embedding=False)
     # gbm_hpo.main(ae_train=True)
-    # nn_hpo.main(train_ae=False)
-    train_utils.main()
+    nn_hpo.main(train_ae=False)
+    # train_utils.main()
     # models = load_models('./saved_models/trained/cross_val/')
     # utils.create_predictions(models=models)
     # utils.create_prediction_file()
     # fenn.main()
     # res.main()
     # train_utils.main()
-    # pred_path = create_preds()
+    # pred_path = create_preds(val=True)
     # CORR
     # numapi.upload_predictions(file_path=pred_path + 'predictions.csv',
     #                          model_id=keys['MODEL_1'])

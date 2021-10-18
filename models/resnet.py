@@ -24,9 +24,10 @@ class ResNet(pl.LightningModule):
         self.lr = params['lr']
         self.activation = params['activation']()
         self.input_size = len(params['features'])
-        self.output_size = 1
+        self.output_size = 1 if params['target_type'] == 'regression' else 5
         self.loss = params['loss']()
         self.corr_loss = params['corr_loss']()
+        self.target_type = params['target_type']
         if params['embedding']:
             cat_dims = [5 for i in range(self.input_size)]
             emb_dims = [(x, min(50, (x + 1) // 2)) for x in cat_dims]
@@ -124,9 +125,14 @@ class ResNet(pl.LightningModule):
         if hidden is not None:
             hidden = hidden.view(hidden.size(1), -1)
         logits = self(x, hidden)
-        loss = self.loss(input=logits, target=y)
-        corr = self.corr_loss(input=logits, target=y).cuda()
-        loss += (1 - corr) * 0.05
+        if not self.target_type == 'regression':
+            loss = self.loss(input=logits, target=y.reshape(-1))
+            corr = self.corr_loss(input=logits, target=y.to(dtype=torch.float)).cuda()
+            loss += (1 - corr) * 0.05
+        else:
+            loss = self.loss(input=logits, target=y)
+            corr = self.corr_loss(input=logits, target=y).cuda()
+            loss += (1 - corr) * 0.05
         self.log('train_loss', loss, prog_bar=True,
                  on_epoch=True, on_step=False)
         self.log('train_corr', corr, prog_bar=True,
@@ -141,9 +147,14 @@ class ResNet(pl.LightningModule):
         if hidden is not None:
             hidden = hidden.view(hidden.size(1), -1)
         logits = self(x, hidden)
-        loss = self.loss(input=logits, target=y)
-        corr = self.corr_loss(input=logits, target=y).cuda()
-        loss += (1 - corr) * 0.05
+        if not self.target_type == 'regression':
+            loss = self.loss(input=logits, target=y.reshape(-1))
+            corr = self.corr_loss(input=logits, target=y.to(dtype=torch.float)).cuda()
+            loss += (1 - corr) * 0.05
+        else:
+            loss = self.loss(input=logits, target=y)
+            corr = self.corr_loss(input=logits, target=y).cuda()
+            loss += (1 - corr) * 0.05
         return {'val_loss': loss, 'val_corr': corr}
 
     def validation_epoch_end(self, val_step_outputs):

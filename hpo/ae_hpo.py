@@ -102,7 +102,7 @@ def main(embedding=False):
     seed_everything(0)
     data = utils.load_data(root_dir='./data/', mode='train')
     data, target, features, era = preprocess_data(
-        data, ordinal=embedding, nn=(not embedding))
+        data, ordinal=embedding, nn=embedding)
     api_token = utils.read_api_token()
     neptune.init(api_token=api_token,
                  project_qualified_name='jamesmccarthy65/NumeraiV2')

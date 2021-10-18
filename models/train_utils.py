@@ -1,4 +1,5 @@
 import datetime
+import gc
 import os.path
 import pickle
 
@@ -59,43 +60,43 @@ class Trainer():
     def cross_val_train(self, splits=5, state=0, downsampling=1, count=0):
         gts = PurgedGroupTimeSeriesSplit(n_splits=splits, group_gap=5)
         for i, (tr_idx, val_idx) in enumerate(gts.split(self.data_dict['data'], groups=self.data_dict['era'])):
-            x_tr, y_tr, x_val, y_val = utils.data_sampler(tr_idx, val_idx, type='train', downsampling=downsampling,
-                                                          count=count)
-            if 'xgb' in self.model_dict:
-                dir = f'./saved_models/xgb/cross_val/{datetime.date.today()}'
-                if not os.path.isdir(dir):
-                    os.makedirs(dir)
-                path = f'./saved_models/xgb/cross_val/{datetime.date.today()}/xgb_{i}_model_seed_{state}.pkl'
-                self.train_xgb(x_tr=x_tr, x_val=x_val,
-                               y_tr=y_tr, y_val=y_val, path=path)
-            if 'lgb' in self.model_dict:
-                dir = f'./saved_models/lgb/cross_val/{datetime.date.today()}'
-                if not os.path.isdir(dir):
-                    os.makedirs(dir)
-                path = f'./saved_models/lgb/cross_val/{datetime.date.today()}/lgb_{i}_model_seed_{state}.txt'
-                self.model_dict['lgb'].update({'seed': state})
-                self.train_lgb(x_tr=x_tr, x_val=x_val,
-                               y_tr=y_tr, y_val=y_val, path=path)
-            if 'cat' in self.model_dict:
-                dir = f'./saved_models/cat/cross_val/{datetime.date.today()}'
-                if not os.path.isdir(dir):
-                    os.makedirs(dir)
-                path = f'./saved_models/cat/cross_val/{datetime.date.today()}/cat_{i}_model_seed_{state}.dump'
-                self.model_dict['cat'].update({'random_state': state})
-                self.train_cat(x_tr=x_tr, x_val=x_val,
-                               y_tr=y_tr, y_val=y_val, path=path)
-            if 'resnet' in self.model_dict:
-                dataset = utils.FinData(
-                    data=self.data_dict['data'], target=self.data_dict['target'], era=self.data_dict['era'])
-                data_loaders = utils.create_dataloaders(
-                    dataset, indexes={
-                        'train': tr_idx.tolist(), 'val': val_idx.tolist()},
-                    batch_size=self.model_dict['resnet']['batch_size'])
-                self.model_dict['resnet'].update(
-                    {'features': [feat for feat in range(len(self.data_dict['features']))]})
+            if i == 4:
+                x_tr, y_tr, x_val, y_val = utils.data_sampler(tr_idx, val_idx, data_dict=self.data_dict,
+                                                              downsampling=self.downsample,
+                                                              count=count)
+                if 'xgb' in self.model_dict:
+                    dir = f'./saved_models/xgb/cross_val/{datetime.date.today()}'
+                    if not os.path.isdir(dir):
+                        os.makedirs(dir)
+                    path = f'./saved_models/xgb/cross_val/{datetime.date.today()}/xgb_{i}_model_downsampling_{self.downsample}_count_{count}.pkl'
+                    self.train_xgb(x_tr=x_tr, x_val=x_val,
+                                   y_tr=y_tr, y_val=y_val, path=path)
+                if 'lgb' in self.model_dict:
+                    dir = f'./saved_models/lgb/cross_val/{datetime.date.today()}'
+                    if not os.path.isdir(dir):
+                        os.makedirs(dir)
+                    path = f'./saved_models/lgb/cross_val/{datetime.date.today()}/lgb_{i}_model_downsampling_{self.downsample}_count_{count}.txt'
+                    self.train_lgb(x_tr=x_tr, x_val=x_val,
+                                   y_tr=y_tr, y_val=y_val, path=path)
+                if 'cat' in self.model_dict:
+                    dir = f'./saved_models/cat/cross_val/{datetime.date.today()}'
+                    if not os.path.isdir(dir):
+                        os.makedirs(dir)
+                    path = f'./saved_models/cat/cross_val/{datetime.date.today()}/cat_{i}_model_downsampling_{self.downsample}_count_{count}.dump'
+                    self.train_cat(x_tr=x_tr, x_val=x_val,
+                                   y_tr=y_tr, y_val=y_val, path=path)
+                if 'resnet' in self.model_dict:
+                    dataset = utils.FinData(
+                        data=self.data_dict['data'], target=self.data_dict['target'], era=self.data_dict['era'])
+                    data_loaders = utils.create_dataloaders(
+                        dataset, indexes={
+                            'train': tr_idx.tolist(), 'val': val_idx.tolist()},
+                        batch_size=self.model_dict['resnet']['batch_size'])
+                    self.model_dict['resnet'].update(
+                        {'features': [feat for feat in range(len(self.data_dict['features']))]})
 
-                path = f'./saved_models/ResNet/cross_val/{datetime.date.today()}/resnet_{i}.pkl'
-                self.train_resnet(data_loaders=data_loaders, path=path)
+                    path = f'./saved_models/ResNet/cross_val/{datetime.date.today()}/resnet_{i}.pkl'
+                    self.train_resnet(data_loaders=data_loaders, path=path)
 
     def train_resnet(self, data_loaders, path):
         checkpoint_callback = pl.callbacks.ModelCheckpoint(dirpath='./lightning_logs',
@@ -163,34 +164,43 @@ class Trainer():
         del model
 
     def full_train(self):
-        tr_idx = np.where(self.data_dict['era'] > 200)[0].tolist()
-        val_idx = np.where(self.data_dict['era'] <= 200)[0].tolist()
+        tr_idx = np.where(self.data_dict['era'] > 550)[0].tolist()
+        val_idx = np.where(self.data_dict['era'] <= 550)[0].tolist()
         x_tr, x_val = self.data_dict['data'][tr_idx], self.data_dict['data'][val_idx]
         y_tr, y_val = self.data_dict['target'][tr_idx], self.data_dict['target'][val_idx]
-
-        if self.model_dict['xgb']:
-            path_xgb = f'./saved_models/xgb/full_train/{datetime.date.today()}/full_train.pkl'
+        del self.data_dict
+        gc.collect()
+        if 'xgb' in self.model_dict:
+            path_xgb = f'./saved_models/xgb/full_train/{datetime.date.today()}'
+            if not os.path.isdir(path_xgb):
+                os.makedirs(path_xgb)
             self.train_xgb(x_tr=x_tr, x_val=x_val, y_tr=y_tr,
-                           y_val=y_val, path=path_xgb)
-        if self.model_dict['lgb']:
-            path_lgb = f'./saved_models/lgb/full_train/{datetime.date.today()}/full_train.txt'
+                           y_val=y_val, path=path_xgb + '/xgb_full_train.pkl')
+        if 'lgb' in self.model_dict:
+            path_lgb = f'./saved_models/lgb/full_train/{datetime.date.today()}'
+            if not os.path.isdir(path_lgb):
+                os.makedirs(path_lgb)
             self.train_lgb(x_tr=x_tr, x_val=x_val, y_tr=y_tr,
-                           y_val=y_val, path=path_lgb)
-        if self.model_dict['cat']:
-            path_cat = f'./saved_models/cat/full_train/{datetime.date.today()}/full_train.dump'
+                           y_val=y_val, path=path_lgb + '/lgb_full_train.txt')
+        if 'cat' in self.model_dict:
+            path_cat = f'./saved_models/cat/full_train/{datetime.date.today()}'
+            if not os.path.isdir(path_cat):
+                os.makedirs(path_cat)
             self.train_cat(x_tr=x_tr, x_val=x_val, y_tr=y_tr,
-                           y_val=y_val, path=path_cat)
+                           y_val=y_val, path=path_cat + '/cat_full_train.dump')
         try:
             del x_tr, x_val, y_tr, y_val
         except:
             pass
-        if self.model_dict['resnet']:
+        if 'resnet' in self.model_dict:
             dataset = utils.FinData(
                 data=self.data_dict['data'], target=self.data_dict['target'], era=self.data_dict['era'])
             data_loaders = utils.create_dataloaders(
                 dataset, indexes={
                     'train': tr_idx, 'val': val_idx}, batch_size=self.model_dict['resnet']['batch_size'])
             path_resnet = './saved_models/ResNet/full_train.pkl'
+            if not os.path.isdir(path_resnet):
+                os.makedirs(path_resnet)
             self.train_resnet(data_loaders=data_loaders, path=path_resnet)
 
 
@@ -210,15 +220,12 @@ def main(add_val=False, downsample=4):
             [data_dict['target'], target], 0)
         data_dict['era'] = pd.Series(
             np.concatenate([data_dict['era'], era], 0))
-    model_dict = {'xgb': './hpo/params/xgb_hpo_2021-05-15.pkl',
-                  'lgb': './hpo/params/lgb_hpo_ae_False_2021-05-16.pkl',
-                  'cat': {'learning_rate': 0.013520865420108316, 'min_data_in_leaf':
-                                           599, 'l2_leaf_reg': 0.04498050323217781, 'bagging_temperature':
-                                           0.17428787707251533, 'depth': 10}
-                  }
+    model_dict = {
+        'lgb': './hpo/params/lgb_hpo_2021-10-11.pkl',
+        'cat': './hpo/params/cat_hpo_2021-10-11.pkl'}
     trainer = Trainer(data_dict=data_dict, model_dict=model_dict, downsample=downsample)
-    for count in range(downsample):
-        trainer.cross_val_train(splits=5, count=count)
-        trainer.cross_val_train(splits=5, count=count)
-        trainer.cross_val_train(splits=5, count=count)
+    # for count in range(downsample):
+    #    trainer.cross_val_train(splits=5, count=count)
+    trainer.downsample = 1
+    # trainer.cross_val_train(splits=5)
     trainer.full_train()

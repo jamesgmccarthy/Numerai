@@ -1,3 +1,4 @@
+import datetime
 from logging import root
 # from models.SupervisedAutoEncoder import create_hidden_rep
 from operator import mod
@@ -13,16 +14,18 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.preprocessing import StandardScaler, OrdinalEncoder
+from sklearn.preprocessing import StandardScaler, OrdinalEncoder, LabelEncoder
 from torch.utils.data import Dataset, Subset, BatchSampler, SequentialSampler, DataLoader, Sampler
 import time
 from joblib import Parallel, delayed
 import gc
 import xgboost as xgb
+from numerapi import NumerAPI
+import numerai_utils as n_utils
 
 
 class FinData(Dataset):
-    def __init__(self, data, target, era, hidden=None, mode='train', transform=None, cache_dir=None):
+    def __init__(self, data, target, era, hidden=None, mode='train', transform=None, cache_dir=None, ordinal=False):
         self.data = data
         self.target = target
         self.mode = mode
@@ -30,6 +33,7 @@ class FinData(Dataset):
         self.cache_dir = cache_dir
         self.era = era
         self.hidden = hidden
+        self.ordinal = ordinal
 
     def __getitem__(self, index):
         if torch.is_tensor(index):
@@ -37,18 +41,33 @@ class FinData(Dataset):
         if self.transform:
             return self.transform(self.data.iloc[index].values)
         else:
-            if type(self.target) is not np.ndarray:
-                sample = {
-                    'target': torch.Tensor(self.target[index].values),
-                    'data':   torch.Tensor(self.data[index]),
-                    'era':    torch.Tensor(self.era[index].values),
-                }
+            if type(self.data) is not np.ndarray:
+                if self.ordinal:
+                    sample = {
+                        'target': torch.Tensor(self.target[index].values),
+                        'data':   torch.Tensor(self.data.loc[index].values),
+                        'era':    torch.Tensor(self.era[index].values),
+                    }
+                else:
+                    sample = {
+                        'target': torch.LongTensor(self.target[index].values),
+                        'data':   torch.Tensor(self.data.loc[index].values),
+                        'era':    torch.Tensor(self.era[index].values),
+                    }
+
             else:
-                sample = {
-                    'target': torch.Tensor(self.target[index]),
-                    'data':   torch.Tensor(self.data[index]),
-                    'era':    torch.Tensor(self.era[index].values),
-                }
+                if self.ordinal:
+                    sample = {
+                        'target': torch.Tensor(self.target[index].values),
+                        'data':   torch.Tensor(self.data[index]),
+                        'era':    torch.Tensor(self.era[index].values),
+                    }
+                else:
+                    sample = {
+                        'target': torch.LongTensor(self.target[index].values),
+                        'data':   torch.Tensor(self.data[index]),
+                        'era':    torch.Tensor(self.era[index].values),
+                    }
             if self.hidden is not None:
                 sample['hidden'] = torch.Tensor(self.hidden[index])
         return sample
@@ -57,8 +76,8 @@ class FinData(Dataset):
         return len(self.data)
 
 
-def get_data_path(root_dir, train=False):
-    if train:
+def get_data_path(root_dir, old=False):
+    if old:
         dotenv_path = 'num_config.env'
         load_dotenv(dotenv_path=dotenv_path)
         curr_round = os.getenv('LATEST_ROUND')
@@ -76,17 +95,21 @@ def load_data(root_dir, mode, overide=None, old=False):
         if overide:
             data = dt.fread(overide).to_pandas()
         elif mode == 'train':
-            data = dt.fread(data_path + '/numerai_training_data.csv').to_pandas()
+            data = dt.fread(
+                data_path + '/numerai_training_data.csv').to_pandas()
         elif mode == 'test':
-            data = dt.fread(data_path + '/numerai_tournament_data.csv').to_pandas()
+            data = dt.fread(
+                data_path + '/numerai_tournament_data.csv').to_pandas()
         return data
     else:
         if overide:
             data = pd.read_parquet(overide)
         elif mode == 'train':
-            data = pd.read_parquet(data_path + '/numerai_training_data.parquet')
+            data = pd.read_parquet(
+                data_path + '/numerai_training_data.parquet')
         elif mode == 'test':
-            data = pd.read_parquet(data_path + '/numerai_tournament_data.parquet')
+            data = pd.read_parquet(
+                data_path + '/numerai_tournament_data.parquet')
         return data
 
 
@@ -159,15 +182,16 @@ def preprocess_data(data: pd.DataFrame, scale: bool = False, nn: bool = False, t
     era = era.transform(lambda x: re.sub('[a-z]', '', x))
     if not test:
         era = era.astype('int')
+    if ordinal:
+        oe = LabelEncoder()
+        data['target'] = oe.fit_transform(data.target.values)
     target = data['target']
     data = data[features]
     if scale:
         scaler = StandardScaler()
         data = scaler.fit_transform(data)
-    if ordinal:
-        oe = OrdinalEncoder()
-        data = oe.fit_transform(data)
-        # data = data.values
+
+    # data = data.values
     if nn:
         data = data.values
     return data, target, features, era
@@ -285,8 +309,8 @@ def init_weights(m, func):
         nn.init.xavier_normal_(m.weight, nn.init.calculate_gain(func))
 
 
-def create_predictions(root_dir: str = './data', models: dict = {}, hidden=True, ae=True):
-    test_files_path, test_files_exist = check_test_files(root_dir)
+def create_predictions(root_dir: str = './data', models: dict = {}, hidden=True, ae=True, val=False):
+    """test_files_path, test_files_exist = check_test_files(root_dir)
     if test_files_exist:
         test_files = os.listdir(test_files_path)
     for file in test_files:
@@ -332,9 +356,62 @@ def create_predictions(root_dir: str = './data', models: dict = {}, hidden=True,
             os.makedirs(f'{get_data_path(root_dir)}/predictions')
         pred_path = f'{get_data_path(root_dir)}/predictions/{era[0]}'
         df.to_csv(f'{pred_path}.csv')
+    """
+
+    if val:
+        df = pd.read_parquet(
+            root_dir + '/numerai_dataset/numerai_validation_data.parquet')
+        example_pred = pd.read_parquet(
+            root_dir + '/numerai_dataset/example_validation_predictions.parquet')
+        df['example_preds'] = example_pred['prediction']
+    else:
+        data_path = check_tournament_data(root_dir)
+        df = pd.read_parquet(data_path)
+        df['target'] = 0
+        df['era'][df['era'] == 'eraX'] = 'era999'
+    data, target, features, era = preprocess_data(data=df, nn=True)
+    t_idx = np.arange(start=0, stop=len(era), step=1).tolist()
+    data_dict = data_dict = {'data':     data, 'target': target,
+                             'features': features, 'era': era}
+    pred_cols = set()
+    for model_type, models_dict in models.items():
+        for model in models_dict.keys():
+            if model_type == 'xgb':
+                d = xgb.DMatrix(data)
+                df[model] = models_dict[model].predict(d).squeeze()
+                del d
+            elif model_type == 'lgb':
+                df[model] = models_dict[model].predict(data).squeeze()
+            elif model_type == 'ae':
+                ae = models_dict[model]
+                ae.eval()
+                d = torch.Tensor(data)
+                _, _, preds_ae, _, _ = ae(d)
+                df[model] = preds_ae.detach().numpy().squeeze()
+            if model_type == 'resnet':
+                resnet = models_dict[model]
+                resnet.eval()
+                d = torch.Tensor(data)
+                pred = resnet(d)
+                df[model] = pred.detach().numpy().squeeze()
+            if model_type == 'cat':
+                df[model] = models_dict[model].predict(data).squeeze()
+            pred_cols.add(model)
+
+    if val:
+        df['ensemble_all'] = sum(df[pred_col]
+                                 for pred_col in pred_cols).rank(pct=True)
+        val_stats = n_utils.validation_metrics(validation_data=df, pred_cols=['ensemble_all'],
+                                               example_col='example_preds')
+        print(val_stats.to_markdown())
+        val_stats.to_csv(
+            f'./data/numerai_dataset/val_stats{datetime.date.today()}.csv')
 
 
 def check_test_files(root_dir='./data'):
+    """
+    Deprecated but may be useful for low memory implementations
+    """
     data_path = get_data_path(root_dir)
     print(data_path)
     test_files_path = f'{data_path}/test_files'
@@ -349,6 +426,17 @@ def check_test_files(root_dir='./data'):
             path = f'{test_files_path}/{era}'
             df[df['era'] == era].to_csv(f'{path}.csv')
         return test_files_path, True
+
+
+def check_tournament_data(root_dir='./data'):
+    napi = NumerAPI()
+    current_round = napi.get_current_round()
+    tournament_data_path = root_dir + \
+                           f'/numerai_dataset/numerai_tournament_data_{current_round}.parquet'
+    if not os.path.isfile(path=tournament_data_path):
+        n_utils.download_data(napi, filename='numerai_torunament_data.parquet',
+                              dest_path=tournament_data_path)
+    return tournament_data_path
 
 
 def create_prediction_file(root_dir='./data', eras=None):
@@ -556,15 +644,14 @@ class EraSampler(Sampler):
         return len(np.unique(self.era))
 
 
-def data_sampler(tr_idx, val_idx, type='train', downsampling=1, count=0):
+def data_sampler(tr_idx: list, val_idx: list, data_dict: dict = None, type='train', downsampling=1, count=0):
+    if not data_dict:
+        data = load_data('./data', mode=type)
+        data = data.iloc[tr_idx[0]:val_idx[-1] + 1]
+        data, target, features, era = preprocess_data(data, nn=True)
+    data, target, features, era = data_dict['data'], data_dict['target'], data_dict['features'], data_dict['era']
     tr_idx, val_idx = np.array(tr_idx), np.array(val_idx)
     tr_idx, val_idx = tr_idx[count::downsampling], val_idx[count::downsampling]
-    data = load_data('./data', mode=type)
-    data = data.iloc[tr_idx[0]:val_idx[-1] + 1]
-    data, target, features, era = preprocess_data(data, nn=True)
-
-    data_dict = {'data':     data, 'target': target,
-                 'features': features, 'era': era}
     x_tr, x_val = data_dict['data'][tr_idx], data_dict['data'][val_idx]
     y_tr, y_val = data_dict['target'][tr_idx], data_dict['target'][val_idx]
     return x_tr, y_tr, x_val, y_val
@@ -573,3 +660,11 @@ def data_sampler(tr_idx, val_idx, type='train', downsampling=1, count=0):
 def get_eras(type='train'):
     data = load_data('./data', mode=type)
     return data[['era', 'target']]
+
+
+def create_data_dict(mode, nn=False):
+    data = load_data('data/', mode=mode)
+    data, target, features, era = preprocess_data(data, nn=nn)
+    data_dict = {'data':     data, 'target': target,
+                 'features': features, 'era': era}
+    return data_dict

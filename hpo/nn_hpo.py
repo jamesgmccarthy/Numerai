@@ -54,9 +54,10 @@ def create_param_dict(trial, trial_file=None):
         dropout = trial.suggest_uniform('dropout', 0.1, 0.5)
         lr = trial.suggest_uniform('lr', 0.00005, 0.05)
         batch_size = trial.suggest_int('batch_size', 8000, 15000)
-        p = {'dim_1': dim_1, 'dim_2': dim_2, 'dim_3': dim_3,
-             'dim_4': dim_4, 'dim_5': dim_5, 'batch_size': batch_size, 'activation': act_func, 'dropout': dropout,
-             'lr':    lr, 'loss': nn.MSELoss, 'corr_loss': CorrLoss, 'embedding': False}
+        p = {'dim_1':       dim_1, 'dim_2': dim_2, 'dim_3': dim_3,
+             'dim_4':       dim_4, 'dim_5': dim_5, 'batch_size': batch_size, 'activation': act_func, 'dropout': dropout,
+             'lr':          lr, 'loss': nn.CrossEntropyLoss, 'corr_loss': CorrLoss, 'embedding': False,
+             'target_type': 'classification'}
     elif trial and trial_file:
         p = joblib.load(trial_file).best_params
         if not p.get('dim_5', None):
@@ -72,8 +73,8 @@ def create_param_dict(trial, trial_file=None):
 
 
 def optimize(trial: optuna.Trial, data_dict):
-    # gts = PurgedGroupTimeSeriesSplit(n_splits=5, group_gap=5)
-    gts = GroupKFold(n_splits=5)
+    gts = PurgedGroupTimeSeriesSplit(n_splits=5, group_gap=5)
+    # gts = GroupKFold(n_splits=5)
     input_size = data_dict['data'].shape[-1]
     output_size = 1
     checkpoint_callback = pl.callbacks.ModelCheckpoint(
