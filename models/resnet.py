@@ -127,16 +127,21 @@ class ResNet(pl.LightningModule):
         logits = self(x, hidden)
         if not self.target_type == 'regression':
             loss = self.loss(input=logits, target=y.reshape(-1))
-            corr = self.corr_loss(input=logits, target=y.to(dtype=torch.float)).cuda()
-            loss += (1 - corr) * 0.05
+            targets = torch.argmax(logits, dim=1).to(dtype=torch.float)
+            acc = torch.sum(targets == y.reshape(-1)) / targets.shape[0]
+            loss += (1 - acc) * 0.05
+            self.log('train_acc', acc, prog_bar=True,
+                     on_epoch=True, on_step=False)
+
         else:
             loss = self.loss(input=logits, target=y)
             corr = self.corr_loss(input=logits, target=y).cuda()
             loss += (1 - corr) * 0.05
+            self.log('train_corr', corr, prog_bar=True,
+                     on_epoch=True, on_step=False)
         self.log('train_loss', loss, prog_bar=True,
                  on_epoch=True, on_step=False)
-        self.log('train_corr', corr, prog_bar=True,
-                 on_epoch=True, on_step=False)
+
         return {'loss': loss}
 
     def validation_step(self, batch, batch_idx):
@@ -149,21 +154,28 @@ class ResNet(pl.LightningModule):
         logits = self(x, hidden)
         if not self.target_type == 'regression':
             loss = self.loss(input=logits, target=y.reshape(-1))
-            corr = self.corr_loss(input=logits, target=y.to(dtype=torch.float)).cuda()
-            loss += (1 - corr) * 0.05
+            targets = torch.argmax(logits, dim=1).to(dtype=torch.float)
+            acc = torch.sum(targets == y.reshape(-1)) / targets.shape[0]
+            loss += (1 - acc) * 0.05
+            return {'val_loss': loss, 'val_acc': acc}
         else:
             loss = self.loss(input=logits, target=y)
             corr = self.corr_loss(input=logits, target=y).cuda()
             loss += (1 - corr) * 0.05
-        return {'val_loss': loss, 'val_corr': corr}
+            return {'val_loss': loss, 'val_corr': corr}
 
     def validation_epoch_end(self, val_step_outputs):
+        if not self.target_type == 'regression':
+            epoch_acc = torch.tensor([x['val_acc']
+                                      for x in val_step_outputs]).mean()
+            self.log('val_acc', epoch_acc, prog_bar=True)
+        else:
+            epoch_corr = torch.tensor([x['val_corr']
+                                       for x in val_step_outputs]).mean()
+            self.log('val_corr', epoch_corr, prog_bar=True)
         epoch_loss = torch.tensor([x['val_loss']
                                    for x in val_step_outputs]).mean()
-        epoch_corr = torch.tensor([x['val_corr']
-                                   for x in val_step_outputs]).mean()
         self.log('val_loss', epoch_loss, prog_bar=True)
-        self.log('val_corr', epoch_corr, prog_bar=True)
 
     def test_step(self, batch, batch_idx):
         return self.validation_step(batch, batch_idx)
