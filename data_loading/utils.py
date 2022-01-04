@@ -7,7 +7,7 @@ import random
 import re
 from typing import List, Tuple
 import dotenv
-import datatable as dt
+#import datatable as dt
 from dotenv.main import load_dotenv
 import numpy as np
 import pandas as pd
@@ -432,7 +432,7 @@ def check_tournament_data(root_dir='./data'):
     napi = NumerAPI()
     current_round = napi.get_current_round()
     tournament_data_path = root_dir + \
-                           f'/numerai_dataset/numerai_tournament_data_{current_round}.parquet'
+        f'/numerai_dataset/numerai_tournament_data_{current_round}.parquet'
     if not os.path.isfile(path=tournament_data_path):
         n_utils.download_data(napi, filename='numerai_torunament_data.parquet',
                               dest_path=tournament_data_path)

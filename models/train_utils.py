@@ -223,7 +223,8 @@ def main(add_val=False, downsample=4):
     model_dict = {
         'lgb': './hpo/params/lgb_hpo_2021-10-11.pkl',
         'cat': './hpo/params/cat_hpo_2021-10-11.pkl'}
-    trainer = Trainer(data_dict=data_dict, model_dict=model_dict, downsample=downsample)
+    trainer = Trainer(data_dict=data_dict,
+                      model_dict=model_dict, downsample=downsample)
     # for count in range(downsample):
     #    trainer.cross_val_train(splits=5, count=count)
     trainer.downsample = 1

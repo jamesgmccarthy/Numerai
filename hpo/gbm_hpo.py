@@ -5,7 +5,7 @@ import copy
 import pandas as pd
 from git.objects import util
 from models.SupervisedAutoEncoder import create_hidden_rep, train_ae_model
-import datatable as dt
+#import datatable as dt
 import joblib
 import lightgbm as lgb
 import neptune
@@ -204,8 +204,10 @@ def main(ae_train=False, loop_downsample=False, old=False):
     print('creating XGBoost Trials')
     if loop_downsample:
         for i in range(downsample):
-            xgb_exp = neptune.create_experiment(f'XGBoost_HPO_downsample_{downsample}_{i}')
-            xgb_neptune_callback = opt_utils.NeptuneCallback(experiment=xgb_exp)
+            xgb_exp = neptune.create_experiment(
+                f'XGBoost_HPO_downsample_{downsample}_{i}')
+            xgb_neptune_callback = opt_utils.NeptuneCallback(
+                experiment=xgb_exp)
             study = optuna.create_study(direction='minimize')
             study.optimize(lambda trial: optimize(trial, downsample=downsample, count=i),
                            n_trials=20, callbacks=[xgb_neptune_callback])
@@ -213,8 +215,10 @@ def main(ae_train=False, loop_downsample=False, old=False):
                 study, f'hpo/params/xgb_hpo_downsample_{i}_{str(datetime.datetime.now().date())}.pkl')
 
             print('Creating LightGBM Trials')
-            lgb_exp = neptune.create_experiment(f'LGBM_HPO_downsample_{downsample}_{i}')
-            lgbm_neptune_callback = opt_utils.NeptuneCallback(experiment=lgb_exp)
+            lgb_exp = neptune.create_experiment(
+                f'LGBM_HPO_downsample_{downsample}_{i}')
+            lgbm_neptune_callback = opt_utils.NeptuneCallback(
+                experiment=lgb_exp)
             study = optuna.create_study(direction='minimize')
             study.optimize(lambda trial: loptimize(trial, downsample=downsample, count=i),
                            n_trials=20, callbacks=[lgbm_neptune_callback])
@@ -222,7 +226,8 @@ def main(ae_train=False, loop_downsample=False, old=False):
                 study, f'hpo/params/lgb_hpo_downsample_{i}_{str(datetime.datetime.now().date())}.pkl')
 
             print('Creating Catboost Trials')
-            cat_exp = neptune.create_experiment(f'CAT_HPO_downsample_{downsample}_{i}')
+            cat_exp = neptune.create_experiment(
+                f'CAT_HPO_downsample_{downsample}_{i}')
             cat_callback = opt_utils.NeptuneCallback(experiment=cat_exp)
             study = optuna.create_study(direction='minimize')
             study.optimize(lambda trial: catboost_optimize(

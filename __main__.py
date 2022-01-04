@@ -1,7 +1,7 @@
 import os
 import pickle
 
-import catboost as cat
+# poimport catboost as cat
 import lightgbm as lgb
 import numerapi
 import pandas as pd
@@ -11,8 +11,8 @@ from dotenv import load_dotenv
 from data_loading import utils
 from metrics.corr_loss_function import CorrLoss
 from models import resnet as res
-from hpo import gbm_hpo, ae_hpo, nn_hpo
-from models import SupervisedAutoEncoder, train_utils
+#from hpo import gbm_hpo, ae_hpo, nn_hpo
+#from models import SupervisedAutoEncoder, train_utils
 
 
 def credentials(override=False):
@@ -27,14 +27,16 @@ def credentials(override=False):
             'MODEL_2':   model_2}
 
 
-def download_data(api: numerapi.NumerAPI, keys):
+def download_data(api: numerapi.NumerAPI, keys, dataset='live_data'):
     current_round = api.get_current_round()
     if int(keys['LATEST_ROUND']) == current_round and os.path.isfile(f'./data/round_{current_round}/live_data.csv'):
         return int(keys['LATEST_ROUND'])
     else:
+
         if not os.path.exists(f'./data/round_{current_round}'):
-            os.mkdir(f'./data/round_{current_round}')
-        api.download_dataset('numerai_live_data.csv', dest_path=f'./data/round_{current_round}/live.csv')
+            os.makedirs(f'./data/round_{current_round}')
+        api.download_dataset(f'numerai_{dataset}',
+                             dest_path=f'./data/round_{current_round}/{dataset}')
         return current_round
 
 
@@ -71,11 +73,14 @@ def load_models(paths):
     for model in paths.keys():
         for file in sorted(os.listdir(paths[model])):
             if model == 'xgb_cross_val' or model == 'xgb':
-                models_loaded['xgb'][file] = pickle.load(open(f'{paths[model]}{file}', 'rb'))
+                models_loaded['xgb'][file] = pickle.load(
+                    open(f'{paths[model]}{file}', 'rb'))
             if model == 'lgb' or model == 'lgb_cross_val':
-                models_loaded['lgb'][file] = lgb.Booster(model_file=f'{paths[model]}{file}')
+                models_loaded['lgb'][file] = lgb.Booster(
+                    model_file=f'{paths[model]}{file}')
             if model == 'cat' or model == 'cat_cross_val':
-                models_loaded['cat'][file] = cat.CatBoostRegressor().load_model(f'{paths[model]}{file}')
+                models_loaded['cat'][file] = cat.CatBoostRegressor(
+                ).load_model(f'{paths[model]}{file}')
             if model == 'resnet' or model == 'resnet_cross_val':
                 print(f'{paths[model]}/{file}')
                 models_loaded['resnet'][file] = utils.load_model(
@@ -87,7 +92,7 @@ def main():
     keys = credentials()
     numapi = numerapi.NumerAPI(
         verbosity='INFO', public_id=keys['PUBLIC_ID'], secret_key=keys['PRIVATE_KEY'])
-    keys['LATEST_ROUND'] = download_data(numapi, keys)
+    keys['LATEST_ROUND'] = download_data(numapi, keys, dataset='datasets.zip')
     update_env_file(keys)
     keys = credentials(override=True)
     utils.seed_everything(0)
@@ -95,7 +100,7 @@ def main():
     # gbm_hpo.main()
     # ae_hpo.main(embedding=False)
     # gbm_hpo.main(ae_train=True)
-    nn_hpo.main(train_ae=False)
+    # nn_hpo.main(train_ae=False)
     # train_utils.main()
     # models = load_models('./saved_models/trained/cross_val/')
     # utils.create_predictions(models=models)
