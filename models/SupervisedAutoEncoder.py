@@ -9,6 +9,7 @@ from torch.nn.modules import dropout
 from torch.nn.modules.batchnorm import BatchNorm1d
 from data_loading import utils
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from models import utils as m_utils
 
 
 class SupAE(pl.LightningModule):
@@ -33,6 +34,7 @@ class SupAE(pl.LightningModule):
             self.input_size = params['input_size']
         self.encoder = nn.Sequential(
             nn.BatchNorm1d(self.input_size),
+            m_utils.GaussianNoise(),
             nn.Linear(self.input_size, params['hidden']),
             nn.BatchNorm1d(params['hidden']),
             self.activation(),
@@ -41,6 +43,10 @@ class SupAE(pl.LightningModule):
             # nn.BatchNorm1d(params['dim_2']),
             # self.activation(),
             # nn.Linear(params['dim_2'], params['hidden']),
+        )
+        self.decoder = nn.Sequential(
+            nn.Dropout(self.drop),
+            nn.Linear(params['hidden'], self.input_size)
         )
         self.MLP = nn.Sequential(
             nn.Linear(self.input_size + params['hidden'], params['dim_1']),
@@ -55,12 +61,10 @@ class SupAE(pl.LightningModule):
             nn.BatchNorm1d(params['dim_3']),
             self.activation(),
             nn.Dropout(self.drop),
-            nn.Linear(params['dim_3'], params['output_size'])
+            nn.Linear(params['dim_3'], params['output_size']),
+            nn.Sigmoid()
         )
-        self.decoder = nn.Sequential(
-            nn.Dropout(self.drop),
-            nn.Linear(params['hidden'], self.input_size)
-        )
+
         """
        nn.BatchNorm1d(params['dim_2']),
        self.activation(),
@@ -74,7 +78,8 @@ class SupAE(pl.LightningModule):
             nn.BatchNorm1d(params['hidden']),
             self.activation(),
             nn.Dropout(self.drop),
-            nn.Linear(params['hidden'], params['output_size'])
+            nn.Linear(params['hidden'], params['output_size']),
+            nn.Sigmoid()
         )
 
     def forward(self, x):
@@ -151,6 +156,7 @@ class SupAE(pl.LightningModule):
 
 
 def train_ae_model(data_dict):
+    """Deprecated"""
     # TODO Dynamic
     p = joblib.load('./hpo/params/ae_sup_params.pkl').best_params
     act_dict = {'relu': nn.ReLU, 'leaky_relu': nn.LeakyReLU,

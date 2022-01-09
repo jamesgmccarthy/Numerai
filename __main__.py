@@ -11,8 +11,12 @@ from dotenv import load_dotenv
 from data_loading import utils
 from metrics.corr_loss_function import CorrLoss
 from models import resnet as res
-#from hpo import gbm_hpo, ae_hpo, nn_hpo
-#from models import SupervisedAutoEncoder, train_utils
+from feature_engineering import utils as fe_utils
+
+from hpo import gbm_hpo, ae_hpo, nn_hpo
+
+
+# from models import SupervisedAutoEncoder, train_utils
 
 
 def credentials(override=False):
@@ -35,7 +39,7 @@ def download_data(api: numerapi.NumerAPI, keys, dataset='live_data'):
 
         if not os.path.exists(f'./data/round_{current_round}'):
             os.makedirs(f'./data/round_{current_round}')
-        api.download_dataset(f'numerai_{dataset}',
+        api.download_dataset(f'numerai_{dataset}_int8.parquet',
                              dest_path=f'./data/round_{current_round}/{dataset}')
         return current_round
 
@@ -92,13 +96,13 @@ def main():
     keys = credentials()
     numapi = numerapi.NumerAPI(
         verbosity='INFO', public_id=keys['PUBLIC_ID'], secret_key=keys['PRIVATE_KEY'])
-    keys['LATEST_ROUND'] = download_data(numapi, keys, dataset='datasets.zip')
+    keys['LATEST_ROUND'] = download_data(numapi, keys, dataset='live_data')
     update_env_file(keys)
     keys = credentials(override=True)
     utils.seed_everything(0)
-
+    # fe_utils.main()
     # gbm_hpo.main()
-    # ae_hpo.main(embedding=False)
+    ae_hpo.main(embedding=False)
     # gbm_hpo.main(ae_train=True)
     # nn_hpo.main(train_ae=False)
     # train_utils.main()

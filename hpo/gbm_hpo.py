@@ -5,7 +5,7 @@ import copy
 import pandas as pd
 from git.objects import util
 from models.SupervisedAutoEncoder import create_hidden_rep, train_ae_model
-#import datatable as dt
+# import datatable as dt
 import joblib
 import lightgbm as lgb
 import neptune
@@ -178,7 +178,6 @@ def main(ae_train=False, loop_downsample=False, old=False):
                      'features': features, 'era': era}
         ae_output = create_hidden_rep(ae_model, data_dict)
         data = np.concatenate([data, ae_output['hidden']], axis=1)
-
     else:
 
         # legacy - can't fit new dataset into memory with val set

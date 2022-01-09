@@ -7,7 +7,7 @@ import random
 import re
 from typing import List, Tuple
 import dotenv
-#import datatable as dt
+import datatable as dt
 from dotenv.main import load_dotenv
 import numpy as np
 import pandas as pd
@@ -22,6 +22,7 @@ import gc
 import xgboost as xgb
 from numerapi import NumerAPI
 import numerai_utils as n_utils
+import json
 
 
 class FinData(Dataset):
@@ -77,13 +78,13 @@ class FinData(Dataset):
 
 
 def get_data_path(root_dir, old=False):
+    dotenv_path = 'num_config.env'
+    load_dotenv(dotenv_path=dotenv_path)
+    curr_round = os.getenv('LATEST_ROUND')
     if old:
-        dotenv_path = 'num_config.env'
-        load_dotenv(dotenv_path=dotenv_path)
-        curr_round = os.getenv('LATEST_ROUND')
         data_path = root_dir + '/numerai_dataset_' + str(curr_round)
     else:
-        data_path = root_dir + '/numerai_dataset'
+        data_path = root_dir + '/round_' + str(curr_round)
     return data_path
 
 
@@ -106,7 +107,7 @@ def load_data(root_dir, mode, overide=None, old=False):
             data = pd.read_parquet(overide)
         elif mode == 'train':
             data = pd.read_parquet(
-                data_path + '/numerai_training_data.parquet')
+                root_dir + '/datasets/numerai_training_data.parquet')
         elif mode == 'test':
             data = pd.read_parquet(
                 data_path + '/numerai_tournament_data.parquet')
@@ -432,7 +433,7 @@ def check_tournament_data(root_dir='./data'):
     napi = NumerAPI()
     current_round = napi.get_current_round()
     tournament_data_path = root_dir + \
-        f'/numerai_dataset/numerai_tournament_data_{current_round}.parquet'
+                           f'/numerai_dataset/numerai_tournament_data_{current_round}.parquet'
     if not os.path.isfile(path=tournament_data_path):
         n_utils.download_data(napi, filename='numerai_torunament_data.parquet',
                               dest_path=tournament_data_path)
@@ -649,12 +650,13 @@ def data_sampler(tr_idx: list, val_idx: list, data_dict: dict = None, type='trai
         data = load_data('./data', mode=type)
         data = data.iloc[tr_idx[0]:val_idx[-1] + 1]
         data, target, features, era = preprocess_data(data, nn=True)
-    data, target, features, era = data_dict['data'], data_dict['target'], data_dict['features'], data_dict['era']
+    #data, target, features, era = data_dict['data'], data_dict['target'], data_dict['features'], data_dict['era']
     tr_idx, val_idx = np.array(tr_idx), np.array(val_idx)
     tr_idx, val_idx = tr_idx[count::downsampling], val_idx[count::downsampling]
     x_tr, x_val = data_dict['data'][tr_idx], data_dict['data'][val_idx]
     y_tr, y_val = data_dict['target'][tr_idx], data_dict['target'][val_idx]
-    return x_tr, y_tr, x_val, y_val
+    era_tr,era_val= data_dict['era'][tr_idx],data_dict['era'][val_idx]
+    return x_tr, y_tr, x_val, y_val, era_tr,era_val
 
 
 def get_eras(type='train'):
@@ -668,3 +670,14 @@ def create_data_dict(mode, nn=False):
     data_dict = {'data':     data, 'target': target,
                  'features': features, 'era': era}
     return data_dict
+
+
+def get_feature_sets(root_dir):
+    with open(f'{root_dir}/datasets/features.json') as f:
+        feature_metadata = json.load(f)
+    leg_feat = feature_metadata['feature_sets']['legacy']
+    med_feat = feature_metadata['feature_sets']['medium']
+    small_feat = feature_metadata['feature_sets']['small']
+    meta_data = ['era', 'data_type']
+    features = {'legacy': leg_feat, 'medium': med_feat, 'small': small_feat, 'meta_data': meta_data}
+    return features
