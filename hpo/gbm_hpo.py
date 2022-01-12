@@ -44,8 +44,9 @@ def optimize(trial: optuna.trial.Trial, downsample=None, count=0):
     data_dict = utils.create_data_dict(mode='train', nn=True)
     for i, (tr_idx, val_idx) in enumerate(gts.split(data_dict['target'], groups=data_dict['era'])):
         print(f'Training on split {i + 1}')
-        x_tr, y_tr, x_val, y_val = utils.data_sampler(tr_idx, val_idx, data_dict=data_dict, downsampling=downsample,
-                                                      count=count)
+        (x_tr, y_tr), (x_val, y_val), _, _ = utils.data_sampler(tr_idx, val_idx, data_dict=data_dict,
+                                                                downsampling=downsample,
+                                                                count=count)
         d_tr = xgb.DMatrix(x_tr, label=y_tr)
         del x_tr
         d_val = xgb.DMatrix(x_val, label=y_val)
@@ -94,8 +95,9 @@ def loptimize(trial, downsample=1, count=0):
     data_dict = utils.create_data_dict(mode='train', nn=True)
     for i, (tr_idx, val_idx) in enumerate(gts.split(data_dict['target'], groups=data_dict['era'])):
         print(f'Training on split {i}')
-        x_tr, y_tr, x_val, y_val = utils.data_sampler(tr_idx, val_idx, data_dict=data_dict, downsampling=downsample,
-                                                      count=count)
+        (x_tr, y_tr), (x_val, y_val), _, _ = utils.data_sampler(tr_idx, val_idx, data_dict=data_dict,
+                                                                downsampling=downsample,
+                                                                count=count)
         train = lgb.Dataset(x_tr, label=y_tr)
         del x_tr
         gc.collect()
@@ -139,8 +141,9 @@ def catboost_optimize(trial, downsample=1, count=0):
     data_dict = utils.create_data_dict(mode='train', nn=True)
     for i, (tr_idx, val_idx) in enumerate(gts.split(data_dict['target'], groups=data_dict['era'])):
         print(f'Training on split {i}')
-        x_tr, y_tr, x_val, y_val = utils.data_sampler(tr_idx, val_idx, data_dict=data_dict, downsampling=downsample,
-                                                      count=count)
+        (x_tr, y_tr), (x_val, y_val), _, _ = utils.data_sampler(tr_idx, val_idx, data_dict=data_dict,
+                                                                downsampling=downsample,
+                                                                count=count)
         model = cat.CatBoostRegressor(iterations=1000, task_type='GPU', **p)
         model.fit(X=x_tr, y=y_tr, eval_set=(x_val, y_val),
                   early_stopping_rounds=50, verbose_eval=10)

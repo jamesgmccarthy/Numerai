@@ -5,6 +5,7 @@ import joblib
 import neptune
 import neptunecontrib.monitoring.optuna as opt_utils
 import optuna
+import pandas as pd
 import pytorch_lightning as pl
 import torch.nn as nn
 from optuna.integration import PyTorchLightningPruningCallback
@@ -79,14 +80,21 @@ def optimize(trial: optuna.Trial, downsample, embedding=False):
         sizes = []
         print(f'Running Trail with params: {p}')
         for i, (train_idx, val_idx) in enumerate(gts.split(data_dict['data'], groups=data_dict['era'])):
-
             model = SupAE(params=p)
             # model.apply(init_weights)
-            x_tr, y_tr, x_val, y_val, era_tr, era_val = utils.data_sampler(
+            (x_tr, y_tr), (x_val, y_val), (era_tr, era_val), (train_idx, val_idx) = utils.data_sampler(
                 train_idx, val_idx, data_dict=data_dict, downsampling=downsample, count=i)
-            x_tr = np.append(x_tr, x_val, 0)
-            y_tr = np.append(y_tr, y_val, 0)
-            era_tr = np.append(era_tr, era_val, 0)
+            if type(x_tr) is np.array or type(x_tr) is np.ndarray:
+                x_tr = np.append(x_tr, x_val, 0)
+            elif type(x_tr) is pd.Series:
+                x_tr = x_tr.append(x_val)
+            if type(y_tr) is np.array or type(y_tr) is np.ndarray:
+                y_tr = np.append(y_tr, y_val, 0)
+            elif type(y_tr) is pd.Series:
+                y_tr = y_tr.append(y_val)
+            if type(era_tr) is np.array or type(era_tr) is np.ndarray:
+                era_tr = np.append(era_tr, era_val, 0)
+            era_tr = era_tr.append(era_val, ignore_index=True)  # keep as pandas Series
             del x_val, y_val, era_val
             dataset = FinData(
                 data=x_tr, target=y_tr, era=era_tr)
