@@ -101,7 +101,7 @@ def main():
     keys = credentials(override=True)
     utils.seed_everything(0)
     # fe_utils.main()
-    # gbm_hpo.main()
+    gbm_hpo.main()
     ae_hpo.main(embedding=False)
     # gbm_hpo.main(ae_train=True)
     # nn_hpo.main(train_ae=False)

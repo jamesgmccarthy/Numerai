@@ -42,35 +42,19 @@ class FinData(Dataset):
         if self.transform:
             return self.transform(self.data.iloc[index].values)
         else:
+            sample = {}
             if type(self.data) is not np.ndarray:
-                if self.ordinal:
-                    sample = {
-                        'target': torch.Tensor(self.target[index].values),
-                        'data':   torch.Tensor(self.data.loc[index].values),
-                        'era':    torch.Tensor(self.era[index].values),
-                    }
-                else:
-                    sample = {
-                        'target': torch.LongTensor(self.target[index].values),
-                        'data':   torch.Tensor(self.data.loc[index].values),
-                        'era':    torch.Tensor(self.era[index].values),
-                    }
-
+                sample['data'] = torch.Tensor(self.data.loc[index].values)
             else:
-                if self.ordinal:
-                    sample = {
-                        'target': torch.Tensor(self.target[index].values),
-                        'data':   torch.Tensor(self.data[index]),
-                        'era':    torch.Tensor(self.era[index].values),
-                    }
-                else:
-                    sample = {
-                        'target': torch.LongTensor(self.target[index].values),
-                        'data':   torch.Tensor(self.data[index]),
-                        'era':    torch.Tensor(self.era[index].values),
-                    }
-            if self.hidden is not None:
-                sample['hidden'] = torch.Tensor(self.hidden[index])
+                sample['data'] = torch.Tensor(self.data[index])
+            if self.ordinal:
+                sample['target'] = torch.Tensor(self.target[index].values)
+            else:
+                sample['target'] = torch.Tensor(self.target[index].values)
+            sample['era'] = torch.Tensor(self.era[index].values)
+        if self.hidden is not None:
+            sample['hidden'] = torch.Tensor(self.hidden[index])
+
         return sample
 
     def __len__(self):
@@ -433,7 +417,7 @@ def check_tournament_data(root_dir='./data'):
     napi = NumerAPI()
     current_round = napi.get_current_round()
     tournament_data_path = root_dir + \
-                           f'/numerai_dataset/numerai_tournament_data_{current_round}.parquet'
+        f'/numerai_dataset/numerai_tournament_data_{current_round}.parquet'
     if not os.path.isfile(path=tournament_data_path):
         n_utils.download_data(napi, filename='numerai_torunament_data.parquet',
                               dest_path=tournament_data_path)
@@ -646,17 +630,28 @@ class EraSampler(Sampler):
 
 
 def data_sampler(tr_idx: list, val_idx: list, data_dict: dict = None, type='train', downsampling=1, count=0):
+    """
+    returns sampled data, downsampling if needed. Not nessecary to use if not downsampling
+
+    returns:
+    train data tuple (data,y)
+    val data tuple (data,y)
+    era (tuple) (tr,val)
+    indexes (tr, val)
+    """
     if not data_dict:
         data = load_data('./data', mode=type)
         data = data.iloc[tr_idx[0]:val_idx[-1] + 1]
         data, target, features, era = preprocess_data(data, nn=True)
-    #data, target, features, era = data_dict['data'], data_dict['target'], data_dict['features'], data_dict['era']
+    # data, target, features, era = data_dict['data'], data_dict['target'], data_dict['features'], data_dict['era']
     tr_idx, val_idx = np.array(tr_idx), np.array(val_idx)
     tr_idx, val_idx = tr_idx[count::downsampling], val_idx[count::downsampling]
     x_tr, x_val = data_dict['data'][tr_idx], data_dict['data'][val_idx]
     y_tr, y_val = data_dict['target'][tr_idx], data_dict['target'][val_idx]
-    era_tr,era_val= data_dict['era'][tr_idx],data_dict['era'][val_idx]
-    return x_tr, y_tr, x_val, y_val, era_tr,era_val
+    era_tr, era_val = data_dict['era'][tr_idx], data_dict['era'][val_idx]
+    tr_idx, val_idx = np.arange(len(tr_idx)), np.arange(
+        len(tr_idx) + 1, len(tr_idx) + len(val_idx))
+    return (x_tr, y_tr), (x_val, y_val), (era_tr, era_val), (tr_idx, val_idx)
 
 
 def get_eras(type='train'):
@@ -679,5 +674,6 @@ def get_feature_sets(root_dir):
     med_feat = feature_metadata['feature_sets']['medium']
     small_feat = feature_metadata['feature_sets']['small']
     meta_data = ['era', 'data_type']
-    features = {'legacy': leg_feat, 'medium': med_feat, 'small': small_feat, 'meta_data': meta_data}
+    features = {'legacy': leg_feat, 'medium': med_feat,
+                'small': small_feat, 'meta_data': meta_data}
     return features
